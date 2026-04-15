@@ -39,7 +39,8 @@
 	"scripts": {
 		"vscode:prepublish": "npm run compile",
 		"vscode:package": "vsce package",
-		"vscode:publish": "vsce publish ; npm run ovsx:publish",
+		"vscode:publish": "npm run vsce:publish ; npm run ovsx:publish",
+		"vsce:publish": "./tools/vsce-publish.bash",
 		"ovsx:publish": "./tools/ovsx-publish.bash",
 		"compile": "tsc -p ./",
 		"watch": "tsc -watch -p ./",

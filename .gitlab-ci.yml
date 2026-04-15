@@ -34,7 +34,7 @@ publish:vsce:
     - build
   script:
     - npm ci --ignore-scripts
-    - npx vsce publish --packagePath vscode-terraform-ui.vsix -p "${VSCE_PAT}"
+    - npm run vsce:publish
   rules:
     - if: $CI_COMMIT_TAG
 
@@ -45,7 +45,7 @@ publish:ovsx:
     - build
   script:
     - npm ci --ignore-scripts
-    - npx ovsx publish vscode-terraform-ui.vsix -p "${OVSX_TOKEN}"
+    - npm run ovsx:publish
   rules:
     - if: $CI_COMMIT_TAG
   allow_failure: true

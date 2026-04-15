@@ -65,15 +65,16 @@ To test: Press `F5` in VSCode to launch Extension Development Host.
    npm run vscode:prepublish
    npm run vscode:package
    ```
-4. Publish to VS Code Marketplace:
+4. Publish to both marketplaces (tokens from encrypted `.env`):
    ```bash
-   npx vsce publish
+   npm run vscode:publish
    ```
-5. Publish to Open VSX:
+   Or individually:
    ```bash
+   npm run vsce:publish
    npm run ovsx:publish
    ```
-6. Commit, tag, and push:
+5. Commit, tag, and push:
    ```bash
    git add package.json package-lock.json CHANGELOG.md
    git commit -m "Bump X.Y.Z"
@@ -93,7 +94,11 @@ The `.gitlab-ci.yml` pipeline automates publishing:
 **Required CI/CD variables:**
 | Variable | Description |
 |----------|-------------|
-| `VSCE_PAT` | VS Code Marketplace Personal Access Token |
-| `OVSX_TOKEN` | Open VSX Registry access token |
 | `CI_REPOSITORY_PUSH_USERNAME` | GitLab username with push rights (for tagging) |
 | `CI_REPOSITORY_PUSH_TOKEN` | GitLab token with push rights (for tagging) |
+
+**Tokens in encrypted `.env`** (decrypted via SOPS at publish time):
+| Variable | Description |
+|----------|-------------|
+| `VSCE_PAT` | VS Code Marketplace Personal Access Token |
+| `OVSX_TOKEN` | Open VSX Registry access token |
