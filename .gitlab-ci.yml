@@ -1,100 +1,101 @@
-stages:
-  - build
-  - publish
-  - release
+include:
+  - project: "signageos/infra/gitlab-ci"
+    file: "/pipelines/.ts-project.yaml"
+    ref: master
+    inputs:
+      disable-checktypes: false
+      disable-prettier: false
+      disable-vulnerability-checks: true
+  - project: "signageos/infra/gitlab-ci"
+    file: "/templates/release.yml"
+    ref: master
 
 variables:
-  NODE_VERSION: "20"
   SOPS_VERSION: "3.9.4"
-
-.install-sops: &install-sops
-  - >
-    curl -fsSL "https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.linux.amd64"
-    -o /usr/local/bin/sops && chmod +x /usr/local/bin/sops
+  BUILD_TARGET: "compile"
 
 # ---------------------------------------------------------------------------
-# Build
+# Build & Package VSIX
 # ---------------------------------------------------------------------------
-build:
+build:package:
   stage: build
-  image: node:${NODE_VERSION}
+  image: $ECR_REGISTRY/signageos/infra/gitlab-ci:master
+  tags:
+    - large
   script:
-    - npm ci --ignore-scripts
-    - npm run compile
-    - npx vsce package -o vscode-terraform-ui.vsix
+    - docker-gitlabci-run npm install --ignore-scripts
+    - update-package-version "$(get-version)"
+    - docker-gitlabci-run npm run compile
+    - docker-gitlabci-run npx vsce package -o vscode-terraform-ui.vsix
   artifacts:
     paths:
       - vscode-terraform-ui.vsix
     expire_in: 1 week
-  rules:
-    - if: $CI_COMMIT_BRANCH
-    - if: $CI_COMMIT_TAG
+  needs:
+    - job: runtime:build
+      optional: true
 
 # ---------------------------------------------------------------------------
 # Publish to VS Code Marketplace & Open VSX (only on tags)
 # ---------------------------------------------------------------------------
+.install-sops:
+  before_script:
+    - >
+      curl -fsSL "https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.linux.amd64"
+      -o /usr/local/bin/sops && chmod +x /usr/local/bin/sops
+
 publish:vsce:
-  stage: publish
-  image: node:${NODE_VERSION}
-  needs:
-    - build
-  script:
-    - *install-sops
-    - npm ci --ignore-scripts
-    - npm run vsce:publish
+  stage: build
+  extends: .install-sops
+  image: $ECR_REGISTRY/signageos/infra/gitlab-ci:master
+  tags:
+    - small
   rules:
-    - if: $CI_COMMIT_TAG
+    - if: "$CI_COMMIT_TAG"
+  script:
+    - docker-gitlabci-run npm install --ignore-scripts
+    - update-package-version "$(get-version)"
+    - docker-gitlabci-run npm run compile
+    - npm run vsce:publish
+  needs:
+    - build:package
 
 publish:ovsx:
-  stage: publish
-  image: node:${NODE_VERSION}
-  needs:
-    - build
-  script:
-    - *install-sops
-    - npm ci --ignore-scripts
-    - npm run ovsx:publish
+  stage: build
+  extends: .install-sops
+  image: $ECR_REGISTRY/signageos/infra/gitlab-ci:master
+  tags:
+    - small
   rules:
-    - if: $CI_COMMIT_TAG
+    - if: "$CI_COMMIT_TAG"
+  script:
+    - docker-gitlabci-run npm install --ignore-scripts
+    - update-package-version "$(get-version)"
+    - docker-gitlabci-run npm run compile
+    - npm run ovsx:publish
+  needs:
+    - build:package
   allow_failure: true
 
 # ---------------------------------------------------------------------------
-# Release — bump patch version, commit, tag, and push
+# Release — reuse standard signageOS release tooling
 # ---------------------------------------------------------------------------
-release:tag:
-  stage: release
-  image: node:${NODE_VERSION}
-  script:
-    - apt-get update -qq && apt-get install -y -qq git > /dev/null
-    - CURRENT=$(node -p "require('./package.json').version")
-    - 'IFS=. read -r MAJOR MINOR PATCH <<< "$CURRENT"'
-    - NEXT="${MAJOR}.${MINOR}.$((PATCH + 1))"
-    - echo "Bumping ${CURRENT} → ${NEXT}"
-    - npm version "${NEXT}" --no-git-tag-version
-    # Update CHANGELOG — rename [Unreleased] to [X.Y.Z] and add new [Unreleased]
-    - sed -i "s/## \[Unreleased\]/## [Unreleased]\n\n## [${NEXT}]/" CHANGELOG.md
-    - git config user.email "ci@signageos.io"
-    - git config user.name "GitLab CI"
-    - PUSH_URL="https://${CI_REPOSITORY_PUSH_USERNAME}:${CI_REPOSITORY_PUSH_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
-    - git add package.json package-lock.json CHANGELOG.md
-    - git commit -m "Bump ${NEXT}"
-    - git tag -a "v${NEXT}" -m "Release v${NEXT}"
-    - git push "${PUSH_URL}" HEAD:${CI_DEFAULT_BRANCH}
-    - git push "${PUSH_URL}" "v${NEXT}"
-  rules:
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      when: manual
+release:tag-new-version:
+  extends: .release:tag-new-version
   needs:
-    - build
+    - build:package
 
-release:notes:
-  stage: release
-  image: registry.gitlab.com/gitlab-org/release-cli:latest
-  script:
-    - echo "Creating release for ${CI_COMMIT_TAG}"
-  release:
-    tag_name: $CI_COMMIT_TAG
-    name: "$CI_COMMIT_TAG"
-    description: "Release $CI_COMMIT_TAG — see CHANGELOG.md for details."
-  rules:
-    - if: $CI_COMMIT_TAG
+release:tag-new-version:beta:
+  extends: .release:tag-new-version:beta
+  needs:
+    - build:package
+
+release:tag-new-version:rc:
+  extends: .release:tag-new-version:rc
+  needs:
+    - build:package
+
+release:publish-release-notes:
+  extends: .release:publish-release-notes
+  needs:
+    - build:package
