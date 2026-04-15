@@ -5,6 +5,8 @@ All notable changes to the "vscode-terraform-ui" extension will be documented in
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
 ## [Unreleased]
+
+## [0.2.0] - 2026-04-15
 ### Added
 - Interactive search filter for terraform roots with case-insensitive matching
 - Parallelism option (`-parallelism` flag) for plan and apply, persisted per root
