@@ -2,6 +2,8 @@
 
 A visual diff tool for Terraform plan changes with targeted apply support.
 
+![Preview](assets/preview.png)
+
 ## Features
 
 - **Visual Plan Diff**: Run `terraform plan` and see all resource changes in a split-pane UI
