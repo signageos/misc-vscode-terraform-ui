@@ -1,0 +1,46 @@
+{
+	"name": "@signageos/vscode-terraform-ui",
+	"displayName": "Terraform UI",
+	"description": "Visual diff tool for Terraform plan changes with targeted apply support",
+	"version": "0.1.0",
+	"publisher": "signageos",
+	"engines": {
+		"vscode": "^1.85.0"
+	},
+	"categories": [
+		"Other"
+	],
+	"activationEvents": [
+		"*"
+	],
+	"main": "./out/extension.js",
+	"contributes": {
+		"commands": [
+			{
+				"command": "terraformUI.open",
+				"title": "Terraform UI"
+			}
+		],
+		"menus": {
+			"explorer/context": [
+				{
+					"command": "terraformUI.open",
+					"group": "navigation",
+					"when": "explorerResourceIsFolder || resourceExtname == .tf"
+				}
+			]
+		}
+	},
+	"scripts": {
+		"vscode:prepublish": "npm run compile",
+		"compile": "tsc -p ./",
+		"watch": "tsc -watch -p ./",
+		"lint": "eslint src --ext ts"
+	},
+	"devDependencies": {
+		"@types/node": "^20.19.39",
+		"@types/vscode": "^1.85.0",
+		"ts-loader": "^9.5.1",
+		"typescript": "^5.3.3"
+	}
+}
