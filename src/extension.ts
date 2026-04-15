@@ -25,7 +25,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			preselectedRoot = roots.find((r) => dir === r || dir.startsWith(r + path.sep));
 		}
 
-		TerraformUIPanel.create(context.extensionUri, roots, preselectedRoot);
+		TerraformUIPanel.create(context.extensionUri, context.globalState, roots, preselectedRoot);
 	});
 
 	context.subscriptions.push(disposable);

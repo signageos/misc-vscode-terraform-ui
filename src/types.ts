@@ -26,6 +26,15 @@ export interface TerraformPlan {
 	rawOutput: string;
 }
 
+/** Per-root settings persisted across sessions */
+export interface RootSettings {
+	parallelism: number;
+}
+
+export const DEFAULT_ROOT_SETTINGS: RootSettings = {
+	parallelism: 10,
+};
+
 /** Message types sent from extension to webview */
 export type ExtensionMessage =
 	| { type: 'planStarted' }
@@ -37,12 +46,15 @@ export type ExtensionMessage =
 	| { type: 'applyComplete'; success: boolean }
 	| { type: 'applyError'; error: string }
 	| { type: 'terraformRoots'; roots: string[]; preselectedRoot?: string }
-	| { type: 'waitingForConfirmation' };
+	| { type: 'waitingForConfirmation' }
+	| { type: 'rootSettings'; root: string; settings: RootSettings };
 
 /** Message types sent from webview to extension */
 export type WebviewMessage =
-	| { type: 'runPlan'; root: string }
-	| { type: 'applyTargets'; root: string; targets: string[] }
+	| { type: 'runPlan'; root: string; parallelism: number }
+	| { type: 'applyTargets'; root: string; targets: string[]; parallelism: number }
 	| { type: 'confirmApply'; input: string }
 	| { type: 'cancelApply' }
-	| { type: 'requestRoots' };
+	| { type: 'requestRoots' }
+	| { type: 'saveSettings'; root: string; settings: RootSettings }
+	| { type: 'loadSettings'; root: string };

@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { TerraformRunner } from './terraformRunner';
 import { buildResourceDiff } from './planParser';
-import { TerraformPlan, WebviewMessage, ResourceChange } from './types';
+import { TerraformPlan, WebviewMessage, ResourceChange, RootSettings, DEFAULT_ROOT_SETTINGS } from './types';
 
 export class TerraformUIPanel {
 	public static readonly viewType = 'terraformUI';
@@ -9,11 +9,12 @@ export class TerraformUIPanel {
 	private readonly panel: vscode.WebviewPanel;
 	private readonly runner: TerraformRunner;
 	private readonly extensionUri: vscode.Uri;
+	private readonly globalState: vscode.Memento;
 	private disposables: vscode.Disposable[] = [];
 	private currentPlan: TerraformPlan | null = null;
 	private applyHandle: ReturnType<TerraformRunner['apply']> | null = null;
 
-	public static create(extensionUri: vscode.Uri, terraformRoots: string[], preselectedRoot?: string): TerraformUIPanel {
+	public static create(extensionUri: vscode.Uri, globalState: vscode.Memento, terraformRoots: string[], preselectedRoot?: string): TerraformUIPanel {
 		const panel = vscode.window.createWebviewPanel(
 			TerraformUIPanel.viewType,
 			'Terraform UI',
@@ -24,17 +25,19 @@ export class TerraformUIPanel {
 			},
 		);
 
-		return new TerraformUIPanel(panel, extensionUri, terraformRoots, preselectedRoot);
+		return new TerraformUIPanel(panel, extensionUri, globalState, terraformRoots, preselectedRoot);
 	}
 
 	private constructor(
 		panel: vscode.WebviewPanel,
 		extensionUri: vscode.Uri,
+		globalState: vscode.Memento,
 		private terraformRoots: string[],
 		private preselectedRoot?: string,
 	) {
 		this.panel = panel;
 		this.extensionUri = extensionUri;
+		this.globalState = globalState;
 		this.runner = new TerraformRunner();
 
 		this.panel.webview.html = this.getHtmlContent();
@@ -60,11 +63,11 @@ export class TerraformUIPanel {
 				break;
 
 			case 'runPlan':
-				await this.runPlan(message.root);
+				await this.runPlan(message.root, message.parallelism);
 				break;
 
 			case 'applyTargets':
-				this.runApply(message.root, message.targets);
+				this.runApply(message.root, message.targets, message.parallelism);
 				break;
 
 			case 'confirmApply':
@@ -77,16 +80,28 @@ export class TerraformUIPanel {
 				this.runner.cancel();
 				this.applyHandle = null;
 				break;
+
+			case 'saveSettings':
+				await this.saveRootSettings(message.root, message.settings);
+				break;
+
+			case 'loadSettings':
+				this.postMessage({
+					type: 'rootSettings',
+					root: message.root,
+					settings: this.loadRootSettings(message.root),
+				});
+				break;
 		}
 	}
 
-	private async runPlan(root: string): Promise<void> {
+	private async runPlan(root: string, parallelism: number): Promise<void> {
 		this.postMessage({ type: 'planStarted' });
 
 		try {
 			const plan = await this.runner.plan(root, (data) => {
 				this.postMessage({ type: 'planOutput', data });
-			});
+			}, parallelism);
 
 			this.currentPlan = plan;
 
@@ -106,7 +121,7 @@ export class TerraformUIPanel {
 		}
 	}
 
-	private runApply(root: string, targets: string[]): void {
+	private runApply(root: string, targets: string[], parallelism: number): void {
 		this.postMessage({ type: 'applyStarted' });
 
 		this.applyHandle = this.runner.apply(root, targets, (data) => {
@@ -116,7 +131,7 @@ export class TerraformUIPanel {
 			if (data.includes('Enter a value:') || data.includes('Do you want to perform these actions')) {
 				this.postMessage({ type: 'waitingForConfirmation' });
 			}
-		});
+		}, parallelism);
 
 		this.applyHandle.process.on('close', (code) => {
 			this.applyHandle = null;
@@ -131,6 +146,18 @@ export class TerraformUIPanel {
 
 	private postMessage(message: unknown): void {
 		this.panel.webview.postMessage(message);
+	}
+
+	private static settingsKey(root: string): string {
+		return `terraformUI.rootSettings.${root}`;
+	}
+
+	private loadRootSettings(root: string): RootSettings {
+		return this.globalState.get<RootSettings>(TerraformUIPanel.settingsKey(root)) ?? { ...DEFAULT_ROOT_SETTINGS };
+	}
+
+	private async saveRootSettings(root: string, settings: RootSettings): Promise<void> {
+		await this.globalState.update(TerraformUIPanel.settingsKey(root), settings);
 	}
 
 	private dispose(): void {
@@ -217,6 +244,39 @@ export class TerraformUIPanel {
 		.toolbar .status {
 			font-size: 11px;
 			color: var(--text-secondary);
+		}
+
+		/* Toolbar options group (right side) */
+		.toolbar-options {
+			display: flex;
+			align-items: center;
+			gap: 12px;
+			margin-left: 8px;
+		}
+		.toolbar-option {
+			display: flex;
+			align-items: center;
+			gap: 4px;
+		}
+		.toolbar-option label {
+			font-size: 11px;
+			color: var(--text-secondary);
+			white-space: nowrap;
+		}
+		.toolbar-option input[type="number"] {
+			width: 52px;
+			padding: 2px 4px;
+			border: 1px solid var(--border-color);
+			background: var(--bg-primary);
+			color: var(--text-primary);
+			border-radius: 3px;
+			font-size: 12px;
+			font-family: var(--vscode-editor-font-family, monospace);
+			text-align: center;
+		}
+		.toolbar-option input[type="number"]:focus {
+			border-color: var(--accent);
+			outline: none;
 		}
 
 		/* Main split layout */
@@ -568,6 +628,12 @@ export class TerraformUIPanel {
 		<button id="planBtn" disabled>▶ Run Plan</button>
 		<div class="spacer"></div>
 		<div class="status" id="statusText"></div>
+		<div class="toolbar-options">
+			<div class="toolbar-option">
+				<label for="parallelismInput">Parallelism:</label>
+				<input type="number" id="parallelismInput" min="1" max="256" value="10" title="Number of concurrent operations (-parallelism flag)" />
+			</div>
+		</div>
 	</div>
 
 	<!-- Main area -->
@@ -628,6 +694,7 @@ export class TerraformUIPanel {
 		let checkedResources = new Set();
 		let currentRoot = '';
 		let isRunning = false;
+		const DEFAULT_PARALLELISM = 10;
 
 		// DOM elements
 		const rootSearchInput = document.getElementById('rootSearchInput');
@@ -635,6 +702,7 @@ export class TerraformUIPanel {
 		const rootSearchWrapper = document.getElementById('rootSearchWrapper');
 		const planBtn = document.getElementById('planBtn');
 		const statusText = document.getElementById('statusText');
+		const parallelismInput = document.getElementById('parallelismInput');
 		const resourceItems = document.getElementById('resourceItems');
 		const resourceEmpty = document.getElementById('resourceEmpty');
 		const resourceCount = document.getElementById('resourceCount');
@@ -724,6 +792,8 @@ export class TerraformUIPanel {
 			rootSearchInput.value = getRootLabel(root);
 			rootDropdown.classList.remove('visible');
 			planBtn.disabled = !currentRoot || isRunning;
+			// Load persisted settings for this root
+			vscode.postMessage({ type: 'loadSettings', root });
 		}
 
 		function showDropdown() {
@@ -780,10 +850,29 @@ export class TerraformUIPanel {
 			}, 150);
 		});
 
+		function getParallelism() {
+			const val = parseInt(parallelismInput.value, 10);
+			return (isNaN(val) || val < 1) ? DEFAULT_PARALLELISM : val;
+		}
+
+		function saveCurrentSettings() {
+			if (!currentRoot) return;
+			vscode.postMessage({
+				type: 'saveSettings',
+				root: currentRoot,
+				settings: { parallelism: getParallelism() },
+			});
+		}
+
+		// Parallelism change — persist on change
+		parallelismInput.addEventListener('change', () => {
+			saveCurrentSettings();
+		});
+
 		// Plan button
 		planBtn.addEventListener('click', () => {
 			if (!currentRoot || isRunning) return;
-			vscode.postMessage({ type: 'runPlan', root: currentRoot });
+			vscode.postMessage({ type: 'runPlan', root: currentRoot, parallelism: getParallelism() });
 		});
 
 		// Clear terminal
@@ -795,7 +884,7 @@ export class TerraformUIPanel {
 		applyBtn.addEventListener('click', () => {
 			if (checkedResources.size === 0 || !currentRoot || isRunning) return;
 			const targets = Array.from(checkedResources);
-			vscode.postMessage({ type: 'applyTargets', root: currentRoot, targets });
+			vscode.postMessage({ type: 'applyTargets', root: currentRoot, targets, parallelism: getParallelism() });
 		});
 
 		// Confirmation
@@ -964,6 +1053,15 @@ export class TerraformUIPanel {
 						}
 						rootSearchInput.value = getRootLabel(currentRoot);
 						planBtn.disabled = false;
+						// Load persisted settings for selected root
+						vscode.postMessage({ type: 'loadSettings', root: currentRoot });
+					}
+					break;
+				}
+
+				case 'rootSettings': {
+					if (msg.root === currentRoot) {
+						parallelismInput.value = msg.settings.parallelism;
 					}
 					break;
 				}

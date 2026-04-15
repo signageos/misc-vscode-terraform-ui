@@ -14,17 +14,22 @@ export class TerraformRunner {
 	 * Run `terraform plan` in the given directory, streaming output via callback.
 	 * Returns the parsed plan when complete.
 	 */
-	async plan(cwd: string, onOutput: OutputCallback): Promise<TerraformPlan> {
+	async plan(cwd: string, onOutput: OutputCallback, parallelism?: number): Promise<TerraformPlan> {
 		// Use a temp file for the plan binary output
 		const planFile = path.join(os.tmpdir(), `tfplan-${Date.now()}`);
 
 		return new Promise<TerraformPlan>((resolve, reject) => {
 			let rawOutput = '';
 
-			onOutput(`$ terraform plan -out="${planFile}" -no-color\n`);
+			const args = ['plan', `-out=${planFile}`, '-no-color', '-input=false'];
+			if (parallelism !== undefined) {
+				args.push(`-parallelism=${parallelism}`);
+			}
+
+			onOutput(`$ terraform ${args.join(' ')}\n`);
 			onOutput(`Working directory: ${cwd}\n\n`);
 
-			const proc = cp.spawn('terraform', ['plan', `-out=${planFile}`, '-no-color', '-input=false'], {
+			const proc = cp.spawn('terraform', args, {
 				cwd,
 				env: { ...process.env },
 			});
@@ -109,8 +114,12 @@ export class TerraformRunner {
 		cwd: string,
 		targets: string[],
 		onOutput: OutputCallback,
+		parallelism?: number,
 	): { process: cp.ChildProcess; writeInput: (input: string) => void } {
 		const args = ['apply', '-no-color'];
+		if (parallelism !== undefined) {
+			args.push(`-parallelism=${parallelism}`);
+		}
 		for (const target of targets) {
 			args.push(`-target=${target}`);
 		}
