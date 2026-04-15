@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { TerraformRunner } from './terraformRunner';
 import { buildResourceDiff } from './planParser';
-import { TerraformPlan, WebviewMessage, ResourceChange, RootSettings, DEFAULT_ROOT_SETTINGS } from './types';
+import { TerraformPlan, WebviewMessage, RootSettings, DEFAULT_ROOT_SETTINGS } from './types';
 
 export class TerraformUIPanel {
 	public static readonly viewType = 'terraformUI';
@@ -14,7 +14,12 @@ export class TerraformUIPanel {
 	private currentPlan: TerraformPlan | null = null;
 	private applyHandle: ReturnType<TerraformRunner['apply']> | null = null;
 
-	public static create(extensionUri: vscode.Uri, globalState: vscode.Memento, terraformRoots: string[], preselectedRoot?: string): TerraformUIPanel {
+	public static create(
+		extensionUri: vscode.Uri,
+		globalState: vscode.Memento,
+		terraformRoots: string[],
+		preselectedRoot?: string,
+	): TerraformUIPanel {
 		const panel = vscode.window.createWebviewPanel(
 			TerraformUIPanel.viewType,
 			'Terraform UI',
@@ -52,14 +57,22 @@ export class TerraformUIPanel {
 
 		// Send the terraform roots once webview is ready
 		setTimeout(() => {
-			this.postMessage({ type: 'terraformRoots', roots: this.terraformRoots, preselectedRoot: this.preselectedRoot });
+			this.postMessage({
+				type: 'terraformRoots',
+				roots: this.terraformRoots,
+				preselectedRoot: this.preselectedRoot,
+			});
 		}, 300);
 	}
 
 	private async handleMessage(message: WebviewMessage): Promise<void> {
 		switch (message.type) {
 			case 'requestRoots':
-				this.postMessage({ type: 'terraformRoots', roots: this.terraformRoots, preselectedRoot: this.preselectedRoot });
+				this.postMessage({
+					type: 'terraformRoots',
+					roots: this.terraformRoots,
+					preselectedRoot: this.preselectedRoot,
+				});
 				break;
 
 			case 'runPlan':
@@ -99,9 +112,13 @@ export class TerraformUIPanel {
 		this.postMessage({ type: 'planStarted' });
 
 		try {
-			const plan = await this.runner.plan(root, (data) => {
-				this.postMessage({ type: 'planOutput', data });
-			}, parallelism);
+			const plan = await this.runner.plan(
+				root,
+				(data) => {
+					this.postMessage({ type: 'planOutput', data });
+				},
+				parallelism,
+			);
 
 			this.currentPlan = plan;
 
@@ -124,14 +141,19 @@ export class TerraformUIPanel {
 	private runApply(root: string, targets: string[], parallelism: number): void {
 		this.postMessage({ type: 'applyStarted' });
 
-		this.applyHandle = this.runner.apply(root, targets, (data) => {
-			this.postMessage({ type: 'applyOutput', data });
+		this.applyHandle = this.runner.apply(
+			root,
+			targets,
+			(data) => {
+				this.postMessage({ type: 'applyOutput', data });
 
-			// Detect when terraform asks for confirmation
-			if (data.includes('Enter a value:') || data.includes('Do you want to perform these actions')) {
-				this.postMessage({ type: 'waitingForConfirmation' });
-			}
-		}, parallelism);
+				// Detect when terraform asks for confirmation
+				if (data.includes('Enter a value:') || data.includes('Do you want to perform these actions')) {
+					this.postMessage({ type: 'waitingForConfirmation' });
+				}
+			},
+			parallelism,
+		);
 
 		this.applyHandle.process.on('close', (code) => {
 			this.applyHandle = null;

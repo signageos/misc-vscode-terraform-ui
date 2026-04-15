@@ -18,9 +18,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		let preselectedRoot: string | undefined;
 		if (uri) {
 			const stat = await vscode.workspace.fs.stat(uri);
-			const dir = stat.type === vscode.FileType.Directory
-				? uri.fsPath
-				: path.dirname(uri.fsPath);
+			const dir = stat.type === vscode.FileType.Directory ? uri.fsPath : path.dirname(uri.fsPath);
 			// Find the matching root (exact match or parent)
 			preselectedRoot = roots.find((r) => dir === r || dir.startsWith(r + path.sep));
 		}
@@ -45,16 +43,10 @@ async function findTerraformRoots(contextUri?: vscode.Uri): Promise<string[]> {
 	// If invoked from context menu on a specific folder/file
 	if (contextUri) {
 		const stat = await vscode.workspace.fs.stat(contextUri);
-		const dir = stat.type === vscode.FileType.Directory
-			? contextUri.fsPath
-			: path.dirname(contextUri.fsPath);
+		const dir = stat.type === vscode.FileType.Directory ? contextUri.fsPath : path.dirname(contextUri.fsPath);
 
 		// Check if this dir has .tf files
-		const tfFiles = await vscode.workspace.findFiles(
-			new vscode.RelativePattern(dir, '*.tf'),
-			null,
-			1,
-		);
+		const tfFiles = await vscode.workspace.findFiles(new vscode.RelativePattern(dir, '*.tf'), null, 1);
 		if (tfFiles.length > 0) {
 			roots.add(dir);
 		}

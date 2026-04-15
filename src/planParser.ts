@@ -32,9 +32,10 @@ export function parsePlanJson(jsonStr: string): TerraformPlan {
 			}
 
 			// For data sources with no-op, show them as "read" action
-			const actions = (rc.mode === 'data' && rc.change.actions.length === 1 && rc.change.actions[0] === 'no-op')
-				? ['read']
-				: rc.change.actions;
+			const actions =
+				rc.mode === 'data' && rc.change.actions.length === 1 && rc.change.actions[0] === 'no-op'
+					? ['read']
+					: rc.change.actions;
 
 			resourceChanges.push({
 				address: rc.address,

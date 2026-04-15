@@ -51,7 +51,11 @@ export class TerraformRunner {
 				this.currentProcess = null;
 
 				if (code !== 0) {
-					try { fs.unlinkSync(planFile); } catch { /* ignore */ }
+					try {
+						fs.unlinkSync(planFile);
+					} catch {
+						/* ignore */
+					}
 					reject(new Error(`terraform plan exited with code ${code}`));
 					return;
 				}
@@ -72,7 +76,11 @@ export class TerraformRunner {
 					});
 
 					showProc.on('close', (showCode) => {
-						try { fs.unlinkSync(planFile); } catch { /* ignore */ }
+						try {
+							fs.unlinkSync(planFile);
+						} catch {
+							/* ignore */
+						}
 
 						if (showCode !== 0) {
 							reject(new Error(`terraform show -json exited with code ${showCode}`));
@@ -90,11 +98,19 @@ export class TerraformRunner {
 					});
 
 					showProc.on('error', (err) => {
-						try { fs.unlinkSync(planFile); } catch { /* ignore */ }
+						try {
+							fs.unlinkSync(planFile);
+						} catch {
+							/* ignore */
+						}
 						reject(err);
 					});
 				} catch (err) {
-					try { fs.unlinkSync(planFile); } catch { /* ignore */ }
+					try {
+						fs.unlinkSync(planFile);
+					} catch {
+						/* ignore */
+					}
 					reject(err);
 				}
 			});
