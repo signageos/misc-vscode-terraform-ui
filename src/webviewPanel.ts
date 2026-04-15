@@ -1070,6 +1070,13 @@ export class TerraformUIPanel {
 		}
 
 		document.addEventListener('keydown', (e) => {
+			// Cmd/Ctrl+Enter → trigger apply (works globally)
+			if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+				e.preventDefault();
+				applyBtn.click();
+				return;
+			}
+
 			if (resources.length === 0) return;
 			// Don't intercept when focus is on an input element
 			const tag = document.activeElement?.tagName;
@@ -1077,11 +1084,23 @@ export class TerraformUIPanel {
 
 			if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
 				e.preventDefault();
-				const currentIndex = resources.findIndex(rc => rc.address === selectedResource);
+				const currentIndex = resources.findIndex((rc) => rc.address === selectedResource);
 				if (e.key === 'ArrowDown') {
 					selectResourceByIndex(currentIndex < 0 ? 0 : Math.min(currentIndex + 1, resources.length - 1));
 				} else {
 					selectResourceByIndex(currentIndex < 0 ? 0 : Math.max(currentIndex - 1, 0));
+				}
+			} else if (e.key === ' ') {
+				// Space → toggle checkbox of selected resource
+				e.preventDefault();
+				if (selectedResource) {
+					if (checkedResources.has(selectedResource)) {
+						checkedResources.delete(selectedResource);
+					} else {
+						checkedResources.add(selectedResource);
+					}
+					renderResources();
+					updateApplyBar();
 				}
 			}
 		});
