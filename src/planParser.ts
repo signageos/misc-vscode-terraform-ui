@@ -26,10 +26,15 @@ export function parsePlanJson(jsonStr: string): TerraformPlan {
 
 	if (data.resource_changes) {
 		for (const rc of data.resource_changes) {
-			// Skip no-op for managed resources, but keep data sources (read)
-			if (rc.change.actions.length === 1 && rc.change.actions[0] === 'no-op') {
+			// Skip no-op for managed resources, but always keep data sources
+			if (rc.change.actions.length === 1 && rc.change.actions[0] === 'no-op' && rc.mode !== 'data') {
 				continue;
 			}
+
+			// For data sources with no-op, show them as "read" action
+			const actions = (rc.mode === 'data' && rc.change.actions.length === 1 && rc.change.actions[0] === 'no-op')
+				? ['read']
+				: rc.change.actions;
 
 			resourceChanges.push({
 				address: rc.address,
@@ -37,7 +42,7 @@ export function parsePlanJson(jsonStr: string): TerraformPlan {
 				mode: rc.mode,
 				type: rc.type,
 				name: rc.name,
-				actions: rc.change.actions,
+				actions,
 				before: rc.change.before,
 				after: rc.change.after,
 				afterUnknown: rc.change.after_unknown,
