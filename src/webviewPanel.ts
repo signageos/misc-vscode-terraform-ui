@@ -13,7 +13,7 @@ export class TerraformUIPanel {
 	private currentPlan: TerraformPlan | null = null;
 	private applyHandle: ReturnType<TerraformRunner['apply']> | null = null;
 
-	public static create(extensionUri: vscode.Uri, terraformRoots: string[]): TerraformUIPanel {
+	public static create(extensionUri: vscode.Uri, terraformRoots: string[], preselectedRoot?: string): TerraformUIPanel {
 		const panel = vscode.window.createWebviewPanel(
 			TerraformUIPanel.viewType,
 			'Terraform UI',
@@ -24,13 +24,14 @@ export class TerraformUIPanel {
 			},
 		);
 
-		return new TerraformUIPanel(panel, extensionUri, terraformRoots);
+		return new TerraformUIPanel(panel, extensionUri, terraformRoots, preselectedRoot);
 	}
 
 	private constructor(
 		panel: vscode.WebviewPanel,
 		extensionUri: vscode.Uri,
 		private terraformRoots: string[],
+		private preselectedRoot?: string,
 	) {
 		this.panel = panel;
 		this.extensionUri = extensionUri;
@@ -48,14 +49,14 @@ export class TerraformUIPanel {
 
 		// Send the terraform roots once webview is ready
 		setTimeout(() => {
-			this.postMessage({ type: 'terraformRoots', roots: this.terraformRoots });
+			this.postMessage({ type: 'terraformRoots', roots: this.terraformRoots, preselectedRoot: this.preselectedRoot });
 		}, 300);
 	}
 
 	private async handleMessage(message: WebviewMessage): Promise<void> {
 		switch (message.type) {
 			case 'requestRoots':
-				this.postMessage({ type: 'terraformRoots', roots: this.terraformRoots });
+				this.postMessage({ type: 'terraformRoots', roots: this.terraformRoots, preselectedRoot: this.preselectedRoot });
 				break;
 
 			case 'runPlan':
@@ -764,7 +765,13 @@ export class TerraformUIPanel {
 							opt.title = root;
 							rootSelect.appendChild(opt);
 						}
-						currentRoot = msg.roots[0];
+						// Preselect the root from context menu, or default to first
+						if (msg.preselectedRoot && msg.roots.includes(msg.preselectedRoot)) {
+							currentRoot = msg.preselectedRoot;
+						} else {
+							currentRoot = msg.roots[0];
+						}
+						rootSelect.value = currentRoot;
 						planBtn.disabled = false;
 					}
 					break;

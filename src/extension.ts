@@ -14,7 +14,18 @@ export function activate(context: vscode.ExtensionContext): void {
 			return;
 		}
 
-		TerraformUIPanel.create(context.extensionUri, roots);
+		// Resolve the preselected root from context menu URI
+		let preselectedRoot: string | undefined;
+		if (uri) {
+			const stat = await vscode.workspace.fs.stat(uri);
+			const dir = stat.type === vscode.FileType.Directory
+				? uri.fsPath
+				: path.dirname(uri.fsPath);
+			// Find the matching root (exact match or parent)
+			preselectedRoot = roots.find((r) => dir === r || dir.startsWith(r + path.sep));
+		}
+
+		TerraformUIPanel.create(context.extensionUri, roots, preselectedRoot);
 	});
 
 	context.subscriptions.push(disposable);

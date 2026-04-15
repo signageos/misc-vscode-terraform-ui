@@ -34,7 +34,7 @@ export type ExtensionMessage =
 	| { type: 'applyOutput'; data: string }
 	| { type: 'applyComplete'; success: boolean }
 	| { type: 'applyError'; error: string }
-	| { type: 'terraformRoots'; roots: string[] }
+	| { type: 'terraformRoots'; roots: string[]; preselectedRoot?: string }
 	| { type: 'waitingForConfirmation' };
 
 /** Message types sent from webview to extension */
