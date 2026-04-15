@@ -1033,6 +1033,37 @@ export class TerraformUIPanel {
 			updateApplyBar();
 		}
 
+		// Keyboard navigation for resource list (up/down arrows)
+		function selectResourceByIndex(index) {
+			if (resources.length === 0 || index < 0 || index >= resources.length) return;
+			const rc = resources[index];
+			selectedResource = rc.address;
+			renderResources();
+			renderDiff(rc);
+			// Scroll the selected item into view
+			const items = resourceItems.querySelectorAll('.resource-item');
+			if (items[index]) {
+				items[index].scrollIntoView({ block: 'nearest' });
+			}
+		}
+
+		document.addEventListener('keydown', (e) => {
+			if (resources.length === 0) return;
+			// Don't intercept when focus is on an input element
+			const tag = document.activeElement?.tagName;
+			if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+			if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+				e.preventDefault();
+				const currentIndex = resources.findIndex(rc => rc.address === selectedResource);
+				if (e.key === 'ArrowDown') {
+					selectResourceByIndex(currentIndex < 0 ? 0 : Math.min(currentIndex + 1, resources.length - 1));
+				} else {
+					selectResourceByIndex(currentIndex < 0 ? 0 : Math.max(currentIndex - 1, 0));
+				}
+			}
+		});
+
 		// Handle messages from extension
 		window.addEventListener('message', (event) => {
 			const msg = event.data;
