@@ -193,7 +193,7 @@ export class TerraformUIPanel {
 			border-bottom: 1px solid var(--border-color);
 			flex-shrink: 0;
 		}
-		.toolbar select, .toolbar button {
+		.toolbar button {
 			padding: 4px 10px;
 			border: 1px solid var(--border-color);
 			background: var(--bg-primary);
@@ -481,6 +481,72 @@ export class TerraformUIPanel {
 		}
 		@keyframes spin { to { transform: rotate(360deg); } }
 
+		/* Searchable root dropdown */
+		.root-search-wrapper {
+			position: relative;
+			flex: 1;
+			max-width: 420px;
+		}
+		.root-search-input {
+			width: 100%;
+			padding: 4px 10px;
+			border: 1px solid var(--border-color);
+			background: var(--bg-primary);
+			color: var(--text-primary);
+			border-radius: 3px;
+			font-size: 12px;
+			font-family: var(--vscode-editor-font-family, monospace);
+			outline: none;
+		}
+		.root-search-input:focus {
+			border-color: var(--accent);
+		}
+		.root-search-input::placeholder {
+			color: var(--text-secondary);
+			opacity: 0.7;
+		}
+		.root-dropdown {
+			display: none;
+			position: absolute;
+			top: 100%;
+			left: 0;
+			right: 0;
+			max-height: 280px;
+			overflow-y: auto;
+			background: var(--bg-primary);
+			border: 1px solid var(--border-color);
+			border-top: none;
+			border-radius: 0 0 3px 3px;
+			z-index: 100;
+			box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+		}
+		.root-dropdown.visible {
+			display: block;
+		}
+		.root-dropdown-item {
+			padding: 6px 10px;
+			font-size: 12px;
+			font-family: var(--vscode-editor-font-family, monospace);
+			cursor: pointer;
+			white-space: nowrap;
+			overflow: hidden;
+			text-overflow: ellipsis;
+		}
+		.root-dropdown-item:hover,
+		.root-dropdown-item.highlighted {
+			background: var(--highlight-bg);
+			color: var(--highlight-fg);
+		}
+		.root-dropdown-item.selected {
+			font-weight: 600;
+		}
+		.root-dropdown-empty {
+			padding: 8px 10px;
+			font-size: 12px;
+			color: var(--text-secondary);
+			font-style: italic;
+		}
+
 		/* Resize handle */
 		.resize-handle {
 			height: 4px;
@@ -495,7 +561,10 @@ export class TerraformUIPanel {
 	<!-- Toolbar -->
 	<div class="toolbar">
 		<label style="font-size:12px;font-weight:600;">Root:</label>
-		<select id="rootSelect"><option value="">Loading...</option></select>
+		<div class="root-search-wrapper" id="rootSearchWrapper">
+			<input type="text" class="root-search-input" id="rootSearchInput" placeholder="Search terraform roots..." autocomplete="off" />
+			<div class="root-dropdown" id="rootDropdown"></div>
+		</div>
 		<button id="planBtn" disabled>▶ Run Plan</button>
 		<div class="spacer"></div>
 		<div class="status" id="statusText"></div>
@@ -561,7 +630,9 @@ export class TerraformUIPanel {
 		let isRunning = false;
 
 		// DOM elements
-		const rootSelect = document.getElementById('rootSelect');
+		const rootSearchInput = document.getElementById('rootSearchInput');
+		const rootDropdown = document.getElementById('rootDropdown');
+		const rootSearchWrapper = document.getElementById('rootSearchWrapper');
 		const planBtn = document.getElementById('planBtn');
 		const statusText = document.getElementById('statusText');
 		const resourceItems = document.getElementById('resourceItems');
@@ -595,10 +666,118 @@ export class TerraformUIPanel {
 		});
 		document.addEventListener('mouseup', () => { isResizing = false; });
 
-		// Root selection
-		rootSelect.addEventListener('change', () => {
-			currentRoot = rootSelect.value;
+		// Searchable root dropdown logic
+		let allRoots = [];
+		let highlightedIndex = -1;
+
+		function getRootLabel(root) {
+			const parts = root.replace(/\\\\/g, '/').split('/');
+			return parts.slice(-2).join('/');
+		}
+
+		function renderDropdown(filter) {
+			rootDropdown.innerHTML = '';
+			const query = (filter || '').toLowerCase();
+			const filtered = allRoots.filter(root => getRootLabel(root).toLowerCase().includes(query) || root.toLowerCase().includes(query));
+
+			if (filtered.length === 0) {
+				const empty = document.createElement('div');
+				empty.className = 'root-dropdown-empty';
+				empty.textContent = query ? 'No matching roots' : 'No Terraform roots found';
+				rootDropdown.appendChild(empty);
+				highlightedIndex = -1;
+				return filtered;
+			}
+
+			highlightedIndex = Math.min(highlightedIndex, filtered.length - 1);
+			if (highlightedIndex < 0) highlightedIndex = 0;
+
+			filtered.forEach((root, i) => {
+				const item = document.createElement('div');
+				item.className = 'root-dropdown-item'
+					+ (root === currentRoot ? ' selected' : '')
+					+ (i === highlightedIndex ? ' highlighted' : '');
+				item.textContent = getRootLabel(root);
+				item.title = root;
+				item.addEventListener('mousedown', (e) => {
+					e.preventDefault();
+					selectRoot(root);
+				});
+				item.addEventListener('mouseenter', () => {
+					highlightedIndex = i;
+					updateHighlight();
+				});
+				rootDropdown.appendChild(item);
+			});
+			return filtered;
+		}
+
+		function updateHighlight() {
+			const items = rootDropdown.querySelectorAll('.root-dropdown-item');
+			items.forEach((item, i) => {
+				item.classList.toggle('highlighted', i === highlightedIndex);
+			});
+		}
+
+		function selectRoot(root) {
+			currentRoot = root;
+			rootSearchInput.value = getRootLabel(root);
+			rootDropdown.classList.remove('visible');
 			planBtn.disabled = !currentRoot || isRunning;
+		}
+
+		function showDropdown() {
+			renderDropdown(rootSearchInput.value);
+			rootDropdown.classList.add('visible');
+		}
+
+		rootSearchInput.addEventListener('focus', () => {
+			rootSearchInput.select();
+			showDropdown();
+		});
+
+		rootSearchInput.addEventListener('input', () => {
+			highlightedIndex = 0;
+			renderDropdown(rootSearchInput.value);
+		});
+
+		rootSearchInput.addEventListener('keydown', (e) => {
+			const items = rootDropdown.querySelectorAll('.root-dropdown-item');
+			if (e.key === 'ArrowDown') {
+				e.preventDefault();
+				if (!rootDropdown.classList.contains('visible')) {
+					showDropdown();
+					return;
+				}
+				highlightedIndex = Math.min(highlightedIndex + 1, items.length - 1);
+				updateHighlight();
+				if (items[highlightedIndex]) items[highlightedIndex].scrollIntoView({ block: 'nearest' });
+			} else if (e.key === 'ArrowUp') {
+				e.preventDefault();
+				highlightedIndex = Math.max(highlightedIndex - 1, 0);
+				updateHighlight();
+				if (items[highlightedIndex]) items[highlightedIndex].scrollIntoView({ block: 'nearest' });
+			} else if (e.key === 'Enter') {
+				e.preventDefault();
+				if (highlightedIndex >= 0 && items[highlightedIndex]) {
+					const query = (rootSearchInput.value || '').toLowerCase();
+					const filtered = allRoots.filter(root => getRootLabel(root).toLowerCase().includes(query) || root.toLowerCase().includes(query));
+					if (filtered[highlightedIndex]) {
+						selectRoot(filtered[highlightedIndex]);
+					}
+				}
+			} else if (e.key === 'Escape') {
+				rootDropdown.classList.remove('visible');
+				rootSearchInput.value = currentRoot ? getRootLabel(currentRoot) : '';
+			}
+		});
+
+		rootSearchInput.addEventListener('blur', () => {
+			// Delay to allow mousedown on dropdown items to fire first
+			setTimeout(() => {
+				rootDropdown.classList.remove('visible');
+				rootSearchInput.value = currentRoot ? getRootLabel(currentRoot) : '';
+			}, 150);
 		});
 
 		// Plan button
@@ -770,29 +949,20 @@ export class TerraformUIPanel {
 			const msg = event.data;
 			switch (msg.type) {
 				case 'terraformRoots': {
-					rootSelect.innerHTML = '';
-					if (msg.roots.length === 0) {
-						const opt = document.createElement('option');
-						opt.value = '';
-						opt.textContent = 'No Terraform roots found';
-						rootSelect.appendChild(opt);
+					allRoots = msg.roots || [];
+					if (allRoots.length === 0) {
+						rootSearchInput.placeholder = 'No Terraform roots found';
+						rootSearchInput.value = '';
+						currentRoot = '';
 					} else {
-						for (const root of msg.roots) {
-							const opt = document.createElement('option');
-							opt.value = root;
-							// Show short path
-							const parts = root.replace(/\\\\/g, '/').split('/');
-							opt.textContent = parts.slice(-2).join('/');
-							opt.title = root;
-							rootSelect.appendChild(opt);
-						}
+						rootSearchInput.placeholder = 'Search terraform roots... (' + allRoots.length + ' found)';
 						// Preselect the root from context menu, or default to first
-						if (msg.preselectedRoot && msg.roots.includes(msg.preselectedRoot)) {
+						if (msg.preselectedRoot && allRoots.includes(msg.preselectedRoot)) {
 							currentRoot = msg.preselectedRoot;
 						} else {
-							currentRoot = msg.roots[0];
+							currentRoot = allRoots[0];
 						}
-						rootSelect.value = currentRoot;
+						rootSearchInput.value = getRootLabel(currentRoot);
 						planBtn.disabled = false;
 					}
 					break;
