@@ -5,6 +5,16 @@ All notable changes to the "vscode-terraform-ui" extension will be documented in
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
 ## [Unreleased]
+### Added
+- Interactive search filter for terraform roots with case-insensitive matching
+- Parallelism option (`-parallelism` flag) for plan and apply, persisted per root
+- Keyboard navigation for resource list with up/down arrow keys
+- Toggle resource checkboxes with Space key
+- Apply selected resources with Cmd+Enter (Mac) / Ctrl+Enter (Win/Linux)
+- Data source attributes included in diff for apply
+
+### Fixed
+- Data source diff rendering
 
 ## [0.1.0]
 ### Added
