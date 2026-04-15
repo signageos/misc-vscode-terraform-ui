@@ -304,6 +304,18 @@ export class TerraformUIPanel {
 		.action-delete { background: var(--diff-remove-bg); color: var(--danger); }
 		.action-replace { background: var(--diff-remove-bg); color: var(--danger); }
 		.action-read { background: rgba(100,100,255,0.15); color: #88f; }
+		.resource-mode-tag {
+			display: inline-block;
+			padding: 0 4px;
+			border-radius: 3px;
+			font-size: 9px;
+			font-weight: 700;
+			text-transform: uppercase;
+			background: rgba(100,100,255,0.2);
+			color: #88f;
+			vertical-align: middle;
+			margin-right: 2px;
+		}
 
 		/* Right panel: diff viewer */
 		.diff-panel {
@@ -661,13 +673,21 @@ export class TerraformUIPanel {
 				info.className = 'resource-info';
 				const addr = document.createElement('div');
 				addr.className = 'resource-address';
-				addr.textContent = rc.address;
+				if (rc.mode === 'data') {
+					const dataTag = document.createElement('span');
+					dataTag.className = 'resource-mode-tag';
+					dataTag.textContent = 'data';
+					addr.appendChild(dataTag);
+					addr.appendChild(document.createTextNode(' ' + rc.address));
+				} else {
+					addr.textContent = rc.address;
+				}
 				addr.title = rc.address;
 				info.appendChild(addr);
 
 				const actionBadge = document.createElement('span');
-				actionBadge.className = 'resource-action action-' + getActionClass(rc.actions);
-				actionBadge.textContent = rc.actions.join('/');
+				actionBadge.className = 'resource-action action-' + getActionClass(rc.actions, rc.mode);
+				actionBadge.textContent = rc.mode === 'data' ? 'read' : rc.actions.join('/');
 
 				item.appendChild(checkbox);
 				item.appendChild(info);
@@ -683,7 +703,8 @@ export class TerraformUIPanel {
 			}
 		}
 
-		function getActionClass(actions) {
+		function getActionClass(actions, mode) {
+			if (mode === 'data') return 'read';
 			if (actions.includes('delete') && actions.includes('create')) return 'replace';
 			if (actions.includes('delete')) return 'delete';
 			if (actions.includes('create')) return 'create';

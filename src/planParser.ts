@@ -4,6 +4,7 @@ interface PlanJson {
 	resource_changes?: Array<{
 		address: string;
 		module_address?: string;
+		mode: string;
 		type: string;
 		name: string;
 		change: {
@@ -25,7 +26,7 @@ export function parsePlanJson(jsonStr: string): TerraformPlan {
 
 	if (data.resource_changes) {
 		for (const rc of data.resource_changes) {
-			// Skip no-op changes
+			// Skip no-op for managed resources, but keep data sources (read)
 			if (rc.change.actions.length === 1 && rc.change.actions[0] === 'no-op') {
 				continue;
 			}
@@ -33,6 +34,7 @@ export function parsePlanJson(jsonStr: string): TerraformPlan {
 			resourceChanges.push({
 				address: rc.address,
 				moduleAddress: rc.module_address,
+				mode: rc.mode,
 				type: rc.type,
 				name: rc.name,
 				actions: rc.change.actions,

@@ -1,14 +1,16 @@
 /** Represents a single resource change from a Terraform plan */
 export interface ResourceChange {
-	/** Full resource address (e.g., "aws_instance.web") */
+	/** Full resource address (e.g., "aws_instance.web" or "data.aws_ami.ubuntu") */
 	address: string;
 	/** Module address if inside a module */
 	moduleAddress?: string;
+	/** Resource mode: "managed" for resources, "data" for data sources */
+	mode: string;
 	/** Resource type (e.g., "aws_instance") */
 	type: string;
 	/** Resource name (e.g., "web") */
 	name: string;
-	/** Actions: "create", "update", "delete", "replace", "read" */
+	/** Actions: "create", "update", "delete", "replace", "read", "no-op" */
 	actions: string[];
 	/** Attribute values before the change */
 	before: Record<string, unknown> | null;
