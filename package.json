@@ -1,9 +1,14 @@
 {
-	"name": "@signageos/vscode-terraform-ui",
-	"displayName": "Terraform UI",
+	"name": "signageos-vscode-terraform-ui",
+	"displayName": "@signageos/vscode-terraform-ui",
 	"description": "Visual diff tool for Terraform plan changes with targeted apply support",
 	"version": "0.1.0",
 	"publisher": "signageos",
+	"repository": {
+		"type": "git",
+		"url": "https://gitlab.com/signageos/experiments/vscode-terraform-ui"
+	},
+	"license": "MIT",
 	"engines": {
 		"vscode": "^1.85.0"
 	},
@@ -33,6 +38,9 @@
 	},
 	"scripts": {
 		"vscode:prepublish": "npm run compile",
+		"vscode:package": "vsce package",
+		"vscode:publish": "vsce publish ; npm run ovsx:publish",
+		"ovsx:publish": "./tools/ovsx-publish.bash",
 		"compile": "tsc -p ./",
 		"watch": "tsc -watch -p ./",
 		"lint": "eslint src --ext ts"
@@ -40,6 +48,7 @@
 	"devDependencies": {
 		"@types/node": "^20.19.39",
 		"@types/vscode": "^1.85.0",
+		"@vscode/vsce": "^3.0.0",
 		"ts-loader": "^9.5.1",
 		"typescript": "^5.3.3"
 	}

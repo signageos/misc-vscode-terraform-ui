@@ -44,3 +44,56 @@ npm run compile
 ```
 
 To test: Press `F5` in VSCode to launch Extension Development Host.
+
+## Release
+
+### Prerequisites
+
+- `vsce` CLI (installed as devDependency via `@vscode/vsce`)
+- VS Code Marketplace PAT ([Azure DevOps](https://dev.azure.com/signageos/_usersSettings/tokens) → Marketplace: Manage scope)
+- Open VSX token ([open-vsx.org](https://open-vsx.org) → User Settings → Access Tokens)
+
+### Manual Release
+
+1. Update `CHANGELOG.md` — rename `[Unreleased]` to `[X.Y.Z]`, add fresh `[Unreleased]` above
+2. Bump version:
+   ```bash
+   npm version X.Y.Z --no-git-tag-version
+   ```
+3. Build and package:
+   ```bash
+   npm run vscode:prepublish
+   npm run vscode:package
+   ```
+4. Publish to VS Code Marketplace:
+   ```bash
+   npx vsce publish
+   ```
+5. Publish to Open VSX:
+   ```bash
+   npm run ovsx:publish
+   ```
+6. Commit, tag, and push:
+   ```bash
+   git add package.json package-lock.json CHANGELOG.md
+   git commit -m "Bump X.Y.Z"
+   git tag -a "vX.Y.Z" -m "Release vX.Y.Z"
+   git push origin master && git push origin "vX.Y.Z"
+   ```
+
+### GitLab CI Release
+
+The `.gitlab-ci.yml` pipeline automates publishing:
+
+1. **Every push**: `build` job compiles and packages the `.vsix`
+2. **Manual on default branch**: `release:tag` creates a git tag from the current `package.json` version
+3. **On tag push**: `publish:vsce` and `publish:ovsx` publish to both marketplaces
+4. **On tag push**: `release:notes` creates a GitLab release
+
+**Required CI/CD variables:**
+| Variable | Description |
+|----------|-------------|
+| `VSCE_PAT` | VS Code Marketplace Personal Access Token |
+| `OVSX_TOKEN` | Open VSX Registry access token |
+| `CI_REPOSITORY_PUSH_USERNAME` | GitLab username with push rights (for tagging) |
+| `CI_REPOSITORY_PUSH_TOKEN` | GitLab token with push rights (for tagging) |

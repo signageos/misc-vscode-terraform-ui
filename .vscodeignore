@@ -1,3 +1,14 @@
-.vscode-test/
+.vscode/**
+.vscode-test/**
+src/**
+.gitignore
+.gitlab-ci.yml
+.sops.yaml
+.env
+**/tsconfig.json
+**/*.map
+**/*.ts
+tools/**
 node_modules/
 *.vsix
+assets/
