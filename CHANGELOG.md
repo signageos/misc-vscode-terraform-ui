@@ -5,6 +5,8 @@ All notable changes to the "vscode-terraform-ui" extension will be documented in
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
 ## [Unreleased]
+### Fixed
+- Uploading extensions to public registries
 
 ## [0.2.0] - 2026-04-15
 ### Added
