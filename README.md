@@ -40,6 +40,10 @@ Init output and raw errors are withheld because backend diagnostics can echo cre
 
 All operations require workspace trust. Only one Terraform process runs at a time across Terraform UI panels. **Cancel operation** requests termination and waits for the process to exit; it does not roll back Terraform's work. Run a fresh plan after Init. Init can download providers/modules and configure backend state; review arguments before running it.
 
+### Multiline diffs
+
+Multiline strings and templates use a display-only heredoc with line-by-line additions, removals, and unchanged context. JSON objects also retain line context. Every physical line is classified, including create/delete and values becoming unknown. HTML and template expressions remain literal text. Heredoc markers avoid collisions with content; a missing final newline is marked explicitly. In multiline strings, carriage returns are shown as `\r` and literal backslashes as `\\`, so CRLF and literal backslash-r remain distinguishable. This view is not executable HCL. Very large unrelated values fall back to full removal/addition rather than an expensive fine-grained diff.
+
 ## Requirements
 
 - **Terraform CLI** must be installed and available in your `PATH`

@@ -1,3 +1,4 @@
+import { diffArrays } from 'diff';
 import { ResourceChange, TerraformPlan } from './types';
 
 interface PlanJson {
@@ -80,25 +81,44 @@ export function buildResourceDiff(change: ResourceChange): string {
 		if (isUnknown) {
 			if (oldVal !== undefined) {
 				lines.push(`~ ${key}:`);
-				lines.push(`  - ${formatValue(oldVal)}`);
+				appendValue(lines, '  - ', '  - ', oldVal);
 				lines.push(`  + (known after apply)`);
 			} else {
 				lines.push(`+ ${key}: (known after apply)`);
 			}
 		} else if (oldVal === undefined && newVal !== undefined) {
-			lines.push(`+ ${key}: ${formatValue(newVal)}`);
+			appendValue(lines, `+ ${key}: `, '+ ', newVal);
 		} else if (oldVal !== undefined && newVal === undefined) {
-			lines.push(`- ${key}: ${formatValue(oldVal)}`);
+			appendValue(lines, `- ${key}: `, '- ', oldVal);
 		} else if (JSON.stringify(oldVal) !== JSON.stringify(newVal)) {
 			lines.push(`~ ${key}:`);
-			lines.push(`  - ${formatValue(oldVal)}`);
-			lines.push(`  + ${formatValue(newVal)}`);
+			const oldLines = formatValue(oldVal).split('\n');
+			const newLines = formatValue(newVal).split('\n');
+			// Bound worst-case edits; fall back to whole-value removal/addition.
+			const parts = diffArrays(oldLines, newLines, { maxEditLength: 1000, timeout: 100 });
+			if (parts) {
+				for (const part of parts) {
+					const prefix = part.added ? '  + ' : part.removed ? '  - ' : '    ';
+					for (const line of part.value) {
+						lines.push(prefix + line);
+					}
+				}
+			} else {
+				appendValue(lines, '  - ', '  - ', oldVal);
+				appendValue(lines, '  + ', '  + ', newVal);
+			}
 		} else {
-			lines.push(`  ${key}: ${formatValue(oldVal)}`);
+			appendValue(lines, `  ${key}: `, '    ', oldVal);
 		}
 	}
 
 	return lines.join('\n');
+}
+
+function appendValue(lines: string[], firstPrefix: string, continuationPrefix: string, value: unknown): void {
+	for (const [index, line] of formatValue(value).split('\n').entries()) {
+		lines.push((index === 0 ? firstPrefix : continuationPrefix) + line);
+	}
 }
 
 function formatValue(value: unknown): string {
@@ -106,7 +126,22 @@ function formatValue(value: unknown): string {
 		return 'null';
 	}
 	if (typeof value === 'string') {
-		return `"${value}"`;
+		if (!value.includes('\n')) {
+			return JSON.stringify(value);
+		}
+		// A display-only heredoc, not executable HCL. Keep templates literal and
+		// distinguish missing final newline and carriage returns explicitly.
+		// Escape literal backslashes first so CR and literal backslash-r cannot
+		// collapse to identical display lines before diffing.
+		const content = value.replace(/\\/g, '\\\\').replace(/\r/g, '\\r');
+		let marker = 'EOT';
+		let suffix = 0;
+		const contentLines = content.split('\n');
+		while (contentLines.some((line) => line.trim() === marker)) {
+			marker = `EOT_${++suffix}`;
+		}
+		const ending = value.endsWith('\n') ? '' : '\n\\ No newline at end of value\n';
+		return `<<-${marker}\n${content}${ending}${marker}`;
 	}
 	if (typeof value === 'object') {
 		return JSON.stringify(value, null, 2);

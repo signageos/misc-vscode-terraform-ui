@@ -9,7 +9,11 @@ src/**
 **/*.map
 **/*.ts
 tools/**
-node_modules/
+node_modules/**
+!node_modules/diff/package.json
+!node_modules/diff/LICENSE
+!node_modules/diff/libcjs/**/*.js
+!node_modules/diff/libcjs/package.json
 *.vsix
 .decrypted~*
 
