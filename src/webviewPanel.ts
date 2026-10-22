@@ -357,7 +357,7 @@ export class TerraformUIPanel {
 				title: 'Terraform UI: executable for selected root',
 				prompt: `Runs on the ${vscode.env.remoteName ? 'remote' : 'local'} extension host, not in the terminal. Enter a literal executable name or absolute path; no arguments or shell startup files.`,
 				value: current.executable,
-				password: true,
+				password: false,
 				ignoreFocusOut: true,
 				validateInput: (value) => {
 					try {
@@ -369,11 +369,26 @@ export class TerraformUIPanel {
 				},
 			});
 			if (executable === undefined || !vscode.workspace.isTrusted || this.cancelRequested) return;
+			const visibility = await vscode.window.showQuickPick(
+				['Edit environment masked', 'Reveal and edit environment visibly'],
+				{
+					title: 'Terraform UI: environment visibility',
+					placeHolder:
+						'May contain secrets. Visible editing reveals saved and typed values; use only in private.',
+					ignoreFocusOut: true,
+				},
+			);
+			if (
+				(visibility !== 'Edit environment masked' && visibility !== 'Reveal and edit environment visibly') ||
+				!vscode.workspace.isTrusted ||
+				this.cancelRequested
+			)
+				return;
 			const environment = await vscode.window.showInputBox({
 				title: 'Terraform UI: private environment overrides',
-				prompt: 'JSON object: string values override inherited extension-host variables; null removes them. {} resets overrides. Stored in host/root-scoped SecretStorage, never imported from terminals.',
+				prompt: 'JSON object: strings override inherited host variables; null removes them; {} resets overrides. May contain secrets. Visible editing exposes saved and typed values. Stored in host/root SecretStorage, never imported from terminals.',
 				value: JSON.stringify(current.environment),
-				password: true,
+				password: visibility !== 'Reveal and edit environment visibly',
 				ignoreFocusOut: true,
 				validateInput: (value) => {
 					try {

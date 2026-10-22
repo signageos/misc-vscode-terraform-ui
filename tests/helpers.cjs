@@ -43,7 +43,7 @@ function createPanel(shared) {
 		onDidDispose: () => disposable,
 	};
 	const vscode = shared?.vscode ?? {
-		window: { createWebviewPanel: () => panel },
+		window: { createWebviewPanel: () => panel, showQuickPick: async items => items[0] },
 		ViewColumn: { One: 1 },
 		workspace: { isTrusted: true },
 		env: {},

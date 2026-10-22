@@ -196,7 +196,7 @@ test('All operations mask synchronous spawn failures', async () => {
 	assert.throws(() => runner.apply('/a', [], () => {}, 1, configured), (error) => !error.message.includes('SECRET'));
 });
 
-test('Native execution settings dialogs are masked, trust-gated, host/root-scoped, and never sent to webview/Memento', async () => {
+test('Native execution executable is visible and environment defaults masked, trust-gated, host/root-scoped, and never sent to webview/Memento', async () => {
 	const ui = createPanel();
 	const prompts = [];
 	ui.vscode.window.showInputBox = async (options) => { prompts.push(options); return prompts.length === 1 ? configured.executable : JSON.stringify(configured.environment); };
@@ -208,7 +208,9 @@ test('Native execution settings dialogs are masked, trust-gated, host/root-scope
 		assert.equal(prompts.length, 0);
 		await ui.receive({ type: 'configureExecution', root: '/a' });
 		assert.equal(prompts.length, 2);
-		assert.equal(prompts.every((prompt) => prompt.password && prompt.ignoreFocusOut), true);
+		assert.equal(prompts[0].password, false);
+		assert.equal(prompts[1].password, true);
+		assert.equal(prompts.every((prompt) => prompt.ignoreFocusOut), true);
 		assert.equal(prompts[0].validateInput('terraform -SECRET').includes('SECRET'), false);
 		assert.equal(prompts[1].validateInput('SECRET').includes('SECRET'), false);
 		assert.equal(ui.values.size, 0);
@@ -507,4 +509,65 @@ test('Apply fails closed for foreign root, forged display address, empty selecti
 test('Execution identity compares complete literal settings independent of JSON environment key order',()=>{
  assert.equal(executionIdentity({executable:'terraform',environment:{A:'a',B:null}}),executionIdentity({executable:'terraform',environment:{B:null,A:'a'}}));
  assert.notEqual(executionIdentity({executable:'terraform',environment:{A:'a'}}),executionIdentity({executable:'terraform',environment:{A:'b'}}));
+});
+
+
+test('Environment visibility is an explicit value-free choice; reveal edits saved values only in native input', async () => {
+ for (const visibility of ['Edit environment masked', 'Reveal and edit environment visibly']) {
+  const ui = createPanel();
+  const prompts = [];
+  const choices = [];
+  await ui.instance.executionSettings.save('/a', configured.executable, JSON.stringify(configured.environment));
+  ui.vscode.window.showQuickPick = async (items, options) => { choices.push({items, options}); return visibility; };
+  ui.vscode.window.showInputBox = async options => { prompts.push(options); return options.value; };
+  try {
+   await ui.receive({type:'configureExecution',root:'/a'});
+   assert.equal(choices.length,1);
+   assert.equal(choices[0].items[0],'Edit environment masked');
+   assert.match(choices[0].options.placeHolder,/secrets.*reveals saved and typed values/);
+   assert.equal(choices[0].options.ignoreFocusOut,true);
+   safe(choices);
+   assert.equal(prompts[0].password,false);
+   assert.equal(prompts[0].value,configured.executable);
+   assert.equal(prompts[1].password,visibility === 'Edit environment masked');
+   assert.equal(prompts[1].value,JSON.stringify(configured.environment));
+   assert.equal(prompts[1].validateInput('{"TF_LOG":"TRACE"}').includes('TRACE'),false);
+   assert.equal(typeof prompts[1].validateInput('{"TF_LOG":"TRACE"}'),'string');
+   assert.equal(prompts[1].validateInput('{"TF_WORKSPACE":"test"}'),undefined);
+   assert.deepEqual(await ui.instance.executionSettings.load('/a'),configured);
+   safe(ui.messages);
+   assert.equal(ui.values.size,0);
+  } finally {ui.dom.window.close();}
+ }
+});
+
+test('Canceling either environment visibility or JSON input never saves the staged visible executable or overrides', async () => {
+ for (const stage of ['executable','visibility','environment','visibility-trust','visibility-cancel','environment-trust','environment-cancel']) {
+  const ui=createPanel();
+  await ui.instance.executionSettings.save('/a',configured.executable,JSON.stringify(configured.environment));
+  const before=new Map(ui.secretValues);
+  let prompts=0;
+  ui.vscode.window.showQuickPick=async()=>{
+   if(stage==='visibility')return undefined;
+   if(stage==='visibility-trust')ui.vscode.workspace.isTrusted=false;
+   if(stage==='visibility-cancel')await ui.receive({type:'cancelApply'});
+   return 'Reveal and edit environment visibly';
+  };
+  ui.vscode.window.showInputBox=async()=>{
+   prompts++;
+   if(stage==='executable')return undefined;
+   if(prompts===1)return '/mock/new executable';
+   if(stage==='environment-trust')ui.vscode.workspace.isTrusted=false;
+   if(stage==='environment-cancel')await ui.receive({type:'cancelApply'});
+   return stage==='environment'?undefined:'{"TF_WORKSPACE":"new"}';
+  };
+  try {
+   await ui.receive({type:'configureExecution',root:'/a'});
+   assert.deepEqual(ui.secretValues,before);
+   assert.deepEqual(await ui.instance.executionSettings.load('/a'),configured);
+   assert.equal(ui.messages.some(message=>message.type==='executionSettingsSaved'),false);
+   assert.equal(ui.messages.at(-1).type,'executionSettingsFinished');
+   safe(ui.messages);
+  } finally {ui.dom.window.close();}
+ }
 });
