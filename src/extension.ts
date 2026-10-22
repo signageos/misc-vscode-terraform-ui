@@ -1,12 +1,14 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { TerraformUIPanel } from './webviewPanel';
+import { registerTerminalCommand, registerTerminalShortcut } from './terminal';
+import { registerTerminalLauncher } from './terminalLauncher';
 
 export function activate(context: vscode.ExtensionContext): void {
 	console.log('[Terraform UI] Extension activating...');
 	vscode.window.showInformationMessage('Terraform UI extension activated!');
 
-	const disposable = vscode.commands.registerCommand('terraformUI.open', async (uri?: vscode.Uri) => {
+	const open = async (uri?: vscode.Uri): Promise<void> => {
 		if (!vscode.workspace.isTrusted) {
 			await vscode.window.showWarningMessage('Trust this workspace before opening Terraform UI.');
 			return;
@@ -24,7 +26,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			const stat = await vscode.workspace.fs.stat(uri);
 			const dir = stat.type === vscode.FileType.Directory ? uri.fsPath : path.dirname(uri.fsPath);
 			// Find the matching root (exact match or parent)
-			preselectedRoot = roots.find((r) => dir === r || dir.startsWith(r + path.sep));
+			preselectedRoot = roots.find((r) => dir === r) || roots.find((r) => dir.startsWith(r + path.sep));
 		}
 
 		TerraformUIPanel.create(
@@ -35,9 +37,15 @@ export function activate(context: vscode.ExtensionContext): void {
 			preselectedRoot,
 			context.globalStorageUri,
 		);
-	});
+	};
 
-	context.subscriptions.push(disposable);
+	const launcher = registerTerminalLauncher(context, open);
+	context.subscriptions.push(
+		vscode.commands.registerCommand('terraformUI.open', open),
+		registerTerminalCommand(open),
+		registerTerminalShortcut(context.extension.id, open, launcher),
+		launcher,
+	);
 }
 
 export function deactivate(): void {

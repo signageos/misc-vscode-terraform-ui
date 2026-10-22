@@ -44,8 +44,33 @@ All operations require workspace trust. Only one Terraform process runs at a tim
 
 Multiline strings and templates use a display-only heredoc with line-by-line additions, removals, and unchanged context. JSON objects also retain line context. Every physical line is classified, including create/delete and values becoming unknown. HTML and template expressions remain literal text. Heredoc markers avoid collisions with content; a missing final newline is marked explicitly. In multiline strings, carriage returns are shown as `\r` and literal backslashes as `\\`, so CRLF and literal backslash-r remain distinguishable. This view is not executable HCL. Very large unrelated values fall back to full removal/addition rather than an expensive fine-grained diff.
 
+### Open the terminal's current folder
+
+For typed **`tfui`** or **`terraform-ui`** commands in POSIX integrated terminals:
+
+1. In a trusted desktop VS Code workspace, run **Terraform UI: Enable tfui / terraform-ui in New Terminals** from the Command Palette and confirm.
+2. Create a **new** integrated terminal after enabling. Existing terminals are not modified.
+3. `cd` to a workspace directory containing `.tf` files, then type `tfui` or `terraform-ui`. The launcher reads its actual process current directory; shell integration is not required. The exact folder is selected in multi-root workspaces. User arguments are ignored; this only opens the UI, never runs Terraform.
+
+The extension writes two executable helpers in its own global storage directory, and its nonpersistent [environmentVariableCollection](https://code.visualstudio.com/api/references/vscode-api#EnvironmentVariableCollection) prepends that directory to PATH **only for newly created integrated terminal processes in this window**. This shadows executables with the same names in those terminals; existing shell aliases/functions can still take precedence. It changes neither your global PATH nor shell startup files. Mutations explicitly disable application through shell-integration scripts: no commands are injected into an existing prompt. Enable again and create a new terminal after an extension/window reload; old terminals retain stale environment values and cannot use the old token. Disposing the extension clears its collection; helper files can remain inert in extension storage.
+
+The fixed `/bin/sh` wrapper uses quoted environment variables to run the bundled launcher with the extension host runtime (`ELECTRON_RUN_AS_NODE=1` for the desktop Electron executable, or the remote Node runtime). The launcher invokes the existing desktop `code --open-url` CLI (`code-insiders` in Insiders), or the remote integrated-terminal CLI's `--openExternal` route with separate arguments and **no shell**, passing a per-activation token and canonical base64url-encoded cwd. The CLI must already be installed and available on terminal PATH. The helper does not install VS Code, Node, or a global executable. Storage paths containing `:` cannot be represented as POSIX PATH entries and are rejected.
+
+Keep the originating VS Code window topmost: [registered extension URLs](https://code.visualstudio.com/api/references/vscode-api#window.registerUriHandler) are delivered to the topmost window, not necessarily their originating window. Other windows reject unknown tokens. URI handling requires workspace trust, exact extension scheme/authority/route/token, a literal absolute cwd inside an open workspace root, and Terraform files directly in that directory. Only roots on this workspace extension host's filesystem are eligible. VS Code transforms remote workspace URIs into host-local `file:` URIs; UI-side remote or foreign authorities are never substituted for the launcher process's cwd. Caller-supplied authority parameters are rejected. This token is routing protection, not a security boundary against processes running as your OS user.
+
+The extension runs on the workspace host for Remote SSH/Containers/WSL. The launcher is designed for **POSIX extension hosts** (including a Linux remote host from a Windows client), with a matching terminal and an existing VS Code CLI capable of URL delivery. A manually SSH-connected terminal on another host is not supported. Native Windows extension hosts have no automatic PATH launcher: use the PowerShell session fallback below. Browser-only VS Code is unsupported. Desktop and remote terminals must use the matching VS Code CLI and preserve its normal extension-URL consent flow.
+
+#### Keyboard command and existing-terminal fallback
+
+Use **Terraform UI: Open from Terminal Folder**, or **Ctrl+Alt+Shift+T** (**Cmd+Alt+Shift+T** on macOS) while the integrated terminal has focus. This fallback requires VS Code shell integration to report the current directory. It does not execute shell commands. If current-directory reporting is unavailable, open the folder from the Explorer.
+
+For an existing integrated **bash/zsh** or **PowerShell (pwsh)** terminal, the older **Terraform UI: Enable tfui in This Terminal** command remains an explicit fallback. Choose the shell actually running and confirm only at a clean, idle prompt with no pending input: this fallback uses shell integration to define/replace a session-only `tfui` function and can interrupt a running command. It uses the original terminal's shell-integration cwd and the existing VS Code CLI; it does not install the PATH helpers. Closing that terminal or reloading the extension invalidates its token. The primary new-terminal launcher above does not use this shell-function mechanism.
+
+The protocol route is also illustrated in Microsoft's [protocol-handler test plan](https://github.com/microsoft/vscode/issues/48427). The [official CLI documentation](https://code.visualstudio.com/docs/configure/command-line) provides no general arbitrary-extension-command switch; both typing routes use desktop `--open-url` or remote `--openExternal` and the registered extension URI handler. **VS Code 1.96.0 is the minimum for both typing routes**: the remote CLI in [1.93.0](https://github.com/microsoft/vscode/blob/1.93.0/src/vs/server/node/server.cli.ts) through [1.95.3](https://github.com/microsoft/vscode/blob/1.95.3/src/vs/server/node/server.cli.ts) recognizes only `http://`, `https://`, and `file://` URLs in `openInBrowser`, converting extension URLs into file paths. [1.96.0](https://github.com/microsoft/vscode/blob/1.96.0/src/vs/server/node/server.cli.ts) recognizes the `vscode://` and `vscode-insiders://` schemes and preserves their routes and query parameters. The remote CLI does not support desktop `--open-url`; use the matching VS Code remote server and its integrated-terminal CLI, not a stale CLI from another installation.
+
 ## Requirements
 
+- **VS Code 1.96.0 or newer** (remote CLI extension-URL delivery and terminal shell integration API)
 - **Terraform CLI** must be installed and available in your `PATH`
 - Initialize each root with **Init** or `terraform init` before running a plan
 
@@ -59,7 +84,7 @@ docker compose exec app npm run check
 docker compose exec app npm test
 ```
 
-`npm test` compiles and discovers `tests/*.test.cjs` through Node’s test runner. It uses mocked processes and a jsdom webview DOM; it never runs Terraform.
+`npm test` compiles and discovers `tests/*.test.cjs` through Node’s test runner. It uses mocked Terraform processes and a jsdom webview DOM, plus real Linux shell execution of the terminal helpers against a stub VS Code CLI. Both typing routes also exercise source-derived remote URL transformations for 1.93.0/1.95.3 (file-path failure) and 1.96.0 (extension-URL delivery); these offline contract tests do not run a complete VS Code server or replace desktop smoke testing. The suite never runs Terraform.
 
 To test in VS Code: Press `F5` in VSCode to launch Extension Development Host.
 

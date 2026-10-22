@@ -10,10 +10,13 @@
 	},
 	"license": "MIT",
 	"engines": {
-		"vscode": "^1.85.0"
+		"vscode": "^1.96.0"
 	},
 	"categories": [
 		"Other"
+	],
+	"extensionKind": [
+		"workspace"
 	],
 	"activationEvents": [
 		"*"
@@ -22,8 +25,31 @@
 	"contributes": {
 		"commands": [
 			{
+				"command": "terraformUI.enableTerminalLauncher",
+				"title": "Terraform UI: Enable tfui / terraform-ui in New Terminals",
+				"enablement": "isWorkspaceTrusted"
+			},
+			{
 				"command": "terraformUI.open",
 				"title": "Terraform UI"
+			},
+			{
+				"command": "terraformUI.openFromTerminal",
+				"title": "Terraform UI: Open from Terminal Folder",
+				"enablement": "isWorkspaceTrusted"
+			},
+			{
+				"command": "terraformUI.enableTerminalShortcut",
+				"title": "Terraform UI: Enable tfui in This Terminal",
+				"enablement": "isWorkspaceTrusted"
+			}
+		],
+		"keybindings": [
+			{
+				"command": "terraformUI.openFromTerminal",
+				"key": "ctrl+alt+shift+t",
+				"mac": "cmd+alt+shift+t",
+				"when": "terminalFocus && isWorkspaceTrusted"
 			}
 		],
 		"menus": {
@@ -52,7 +78,7 @@
 	},
 	"devDependencies": {
 		"@types/node": "^20.19.39",
-		"@types/vscode": "^1.85.0",
+		"@types/vscode": "^1.93.0",
 		"@typescript-eslint/eslint-plugin": "^8.58.2",
 		"@typescript-eslint/parser": "^8.58.2",
 		"@vscode/vsce": "^3.0.0",
