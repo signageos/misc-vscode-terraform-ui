@@ -243,6 +243,30 @@ for (const options of [{ trusted: false }, { cancel: true }, { revokeOnConsent: 
 	});
 }
 
+test('launcher reports stale or unenabled sessions without revealing URI, token or cwd and can be explicitly recovered', async t => {
+	const extensionId = require('../package.json').publisher + '.' + require('../package.json').name;
+	const first = fixture(await temporary(t), { extensionId });
+	await first.enable();
+	const stale = first.request('/second/private-folder');
+	first.launcher.dispose();
+	const next = fixture(await temporary(t), { extensionId });
+	await next.launcher.handleUri(stale);
+	assert.deepEqual(next.opened, []);
+	assert.match(next.messages.at(-1), /another window.*earlier extension session/);
+	assert.match(next.messages.at(-1), /NEW terminal/);
+	assert.doesNotMatch(next.messages.at(-1), /token=|vscode:\/\/|private-folder/);
+	assert.ok(!next.messages.at(-1).includes(stale.query.split('&')[0].slice(6)));
+	await next.enable();
+	await next.launcher.handleUri(stale);
+	assert.deepEqual(next.opened, []);
+	await next.launcher.handleUri(next.request());
+	assert.equal(next.opened.length, 1);
+	next.state.trusted = false;
+	await next.launcher.handleUri(next.request());
+	assert.match(next.messages.at(-1), /Trust this workspace/);
+	assert.equal(next.opened.length, 1);
+});
+
 test('trust loss blocks a previously enabled URI and storage failure never mutates terminal environment', async t => {
 	const directory = await temporary(t);
 	const f = fixture(directory);

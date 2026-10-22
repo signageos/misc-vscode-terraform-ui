@@ -88,19 +88,21 @@ export function registerTerminalLauncher(
 	});
 	return {
 		async handleUri(uri: vscode.Uri): Promise<void> {
-			if (
-				disposed ||
-				!token ||
-				!vscode.workspace.isTrusted ||
-				uri.scheme !== scheme ||
-				uri.authority !== extensionId ||
-				uri.path !== '/launch' ||
-				uri.query.length > 65536 ||
-				uri.fragment
-			)
+			if (disposed || uri.scheme !== scheme || uri.authority !== extensionId || uri.path !== '/launch') return;
+			if (!vscode.workspace.isTrusted) {
+				await vscode.window.showWarningMessage('Trust this workspace before opening Terraform UI.');
 				return;
-			const match = /^token=([a-f0-9]{64})&cwd=([A-Za-z0-9_-]+)$/.exec(uri.query);
-			if (!match || match[1] !== token) return;
+			}
+			const match =
+				!uri.fragment && uri.query.length <= 65536
+					? /^token=([a-f0-9]{64})&cwd=([A-Za-z0-9_-]+)$/.exec(uri.query)
+					: null;
+			if (!token || !match || match[1] !== token) {
+				await vscode.window.showWarningMessage(
+					'Terraform UI did not open: this launcher is invalid or belongs to another window or an earlier extension session. Focus the window where you enabled it. After a reload, run "Terraform UI: Enable tfui / terraform-ui in New Terminals" again and create a NEW terminal.',
+				);
+				return;
+			}
 			const encoded = match[2];
 			const cwd = Buffer.from(encoded, 'base64url').toString('utf8');
 			if (
@@ -108,8 +110,12 @@ export function registerTerminalLauncher(
 				cwd.includes('\0') ||
 				!path.posix.isAbsolute(cwd) ||
 				path.posix.normalize(cwd) !== cwd
-			)
+			) {
+				await vscode.window.showWarningMessage(
+					'Terraform UI did not open: the launcher did not provide a supported extension-host folder. Enable the launchers again and create a NEW terminal.',
+				);
 				return;
+			}
 			const roots = vscode.workspace.workspaceFolders || [];
 			for (const root of roots) {
 				// A workspace extension host sees its own filesystem as file://, even remotely:

@@ -326,6 +326,29 @@ for (const mutation of [
 	});
 }
 
+test('real extension ID reports stale function after host restart and recovers only by explicit enable', async () => {
+	const f = fixture();
+	const opened = [];
+	const id = require('../package.json').publisher + '.' + require('../package.json').name;
+	const first = f.registerTerminalShortcut(id, async cwd => opened.push(cwd));
+	await f.commands.get('terraformUI.enableTerminalShortcut')();
+	const stale = callbackUri(f);
+	first.dispose();
+	const next = f.registerTerminalShortcut(id, async cwd => opened.push(cwd));
+	const warningCount = f.warnings.length;
+	await f.handle(stale);
+	assert.deepEqual(opened, []);
+	assert.equal(f.warnings.length, warningCount + 1);
+	assert.match(f.warnings.at(-1), /another window.*earlier extension session/);
+	assert.match(f.warnings.at(-1), /Enable tfui in This Terminal/);
+	assert.doesNotMatch(f.warnings.at(-1), /token=|vscode:\/\//);
+	assert.ok(!f.warnings.at(-1).includes(stale.query.slice(6)));
+	await f.commands.get('terraformUI.enableTerminalShortcut')();
+	await f.handle(callbackUri(f));
+	assert.deepEqual(opened, [f.cwd]);
+	next.dispose();
+});
+
 test('tokens bind independently to multiple terminals', async () => {
 	const f = fixture();
 	const s = shortcut(f);

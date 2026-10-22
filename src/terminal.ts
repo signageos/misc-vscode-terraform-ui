@@ -146,16 +146,18 @@ export function registerTerminalShortcut(
 				await launcher?.handleUri(uri);
 				return;
 			}
-			if (
-				uri.scheme !== vscode.env.uriScheme ||
-				uri.authority !== extensionId ||
-				uri.path !== '/terminal' ||
-				uri.fragment ||
-				!/^token=[a-f0-9]{64}$/.test(uri.query)
-			)
+			if (uri.scheme !== vscode.env.uriScheme || uri.authority !== extensionId || uri.path !== '/terminal')
 				return;
-			const terminal = tokens.get(uri.query.slice('token='.length));
-			if (!terminal || !vscode.window.terminals.includes(terminal)) return;
+			const terminal =
+				!uri.fragment && /^token=[a-f0-9]{64}$/.test(uri.query)
+					? tokens.get(uri.query.slice('token='.length))
+					: undefined;
+			if (!terminal || !vscode.window.terminals.includes(terminal)) {
+				await vscode.window.showWarningMessage(
+					'Terraform UI did not open: this terminal shortcut is invalid or belongs to another window or an earlier extension session. Focus the window where you enabled it. After a reload, run "Terraform UI: Enable tfui in This Terminal" again at a clean prompt in the terminal you want to use.',
+				);
+				return;
+			}
 			await openTerminalFolder(terminal, open);
 		},
 	});
