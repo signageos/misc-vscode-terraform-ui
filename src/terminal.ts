@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
+import { realpath } from 'node:fs/promises';
 import * as path from 'node:path';
 import { matchesTerminalQuery, parseTerminalQuery, resolveTerminalUri } from './terminalUri';
 
@@ -98,17 +99,38 @@ export async function openHostFolder(encoded: string, open: (uri: vscode.Uri) =>
 		);
 		return;
 	}
-	for (const root of vscode.workspace.workspaceFolders || []) {
+	const roots = (vscode.workspace.workspaceFolders || []).filter(
 		// Remote workspace extension hosts see their own filesystem as file://.
 		// Do not reinterpret vscode-local or foreign authorities as host paths.
-		if (root.uri.scheme !== 'file' || root.uri.authority || root.uri.query || root.uri.fragment) continue;
-		const relative = path.posix.relative(root.uri.path, cwd);
-		if (relative === '..' || relative.startsWith('../') || path.posix.isAbsolute(relative)) continue;
-		await openCurrentFolder(root.uri.with({ path: cwd, query: '', fragment: '' }), open);
+		(root) => root.uri.scheme === 'file' && !root.uri.authority && !root.uri.query && !root.uri.fragment,
+	);
+	try {
+		const physicalCwd = await realpath(cwd);
+		for (const root of roots) {
+			let physicalRoot: string;
+			try {
+				physicalRoot = await realpath(root.uri.fsPath);
+			} catch {
+				continue;
+			}
+			const relative = path.posix.relative(physicalRoot, physicalCwd);
+			if (relative === '..' || relative.startsWith('../') || path.posix.isAbsolute(relative)) continue;
+			// process.cwd() resolves symlinks; VS Code retains the opened root's spelling.
+			// Map back only after physical containment, then recheck current workspace/trust.
+			await openCurrentFolder(
+				root.uri.with({ path: path.posix.join(root.uri.path, relative), query: '', fragment: '' }),
+				open,
+			);
+			return;
+		}
+	} catch {
+		await vscode.window.showWarningMessage(
+			'Terraform UI could not resolve the terminal folder on this extension host. Check that it still exists and is accessible.',
+		);
 		return;
 	}
 	await vscode.window.showWarningMessage(
-		'Open the terminal folder in this extension host’s workspace first. Foreign hosts are not supported.',
+		'Open the terminal folder in the Extension Development Host window’s workspace (or the current workspace when not debugging) first. Only folders physically inside a root on this extension host are supported; foreign hosts are not supported.',
 	);
 }
 

@@ -67,10 +67,10 @@ function fixture(options = {}) {
 		workspace: {
 			get isTrusted() { return state.trusted; },
 			workspaceFolders: folders,
-			getWorkspaceFolder: () => options.outside ? undefined : { uri: {
+			getWorkspaceFolder: options.getWorkspaceFolder || (() => options.outside ? undefined : { uri: {
 				scheme: options.folderScheme || cwd.scheme,
 				authority: options.folderAuthority || cwd.authority,
-			} },
+			} }),
 			fs: { stat: async () => {
 				if (options.statError) throw new Error('private details');
 				return { type: options.file ? 1 : 2 };
@@ -98,6 +98,7 @@ function fixture(options = {}) {
 	delete require.cache[extensionPath];
 	Module._load = function (name, parent, isMain) {
 		if (name === 'vscode') return vscode;
+		if (name === 'node:fs/promises') return { ...originalLoad.call(this, name, parent, isMain), realpath: options.realpath || (async value => value) };
 		if (name === './webviewPanel') return { TerraformUIPanel: { create: (...args) => opened.push(args) } };
 		return originalLoad.call(this, name, parent, isMain);
 	};
@@ -516,3 +517,47 @@ test('actual remote bash function preserves cwd, serialized minted metadata and 
 	assert.equal(s.opened[0].scheme, 'file');
 	assert.equal(f.cwd.scheme, 'vscode-local');
 });
+
+for (const scenario of ['symlink-root', 'physical-root', 'outside', 'escaping-link', 'foreign-authority', 'foreign-scheme', 'missing', 'trust-changed', 'workspace-changed']) {
+	test(`remote process cwd canonical containment: ${scenario}`, async t => {
+		const fs = require('node:fs/promises');
+		const base = await fs.mkdtemp(path.join(require('node:os').tmpdir(), 'tfui-canonical-'));
+		t.after(() => fs.rm(base, { recursive: true, force: true }));
+		const physical = path.join(base, 'physical root');
+		const alias = path.join(base, 'logical root');
+		const outside = path.join(base, 'outside');
+		await fs.mkdir(path.join(physical, 'child with spaces'), { recursive: true });
+		await fs.mkdir(outside);
+		await fs.symlink(physical, alias);
+		await fs.symlink(outside, path.join(physical, 'escape'));
+		const root = scenario === 'physical-root' ? physical : alias;
+		const cwd = scenario === 'outside' ? outside : scenario === 'escaping-link' ? path.join(alias, 'escape') : scenario === 'missing' ? path.join(base, 'missing') : path.join(physical, 'child with spaces');
+		const rootUri = makeUri({ scheme: 'file', authority: '', path: root });
+		let f;
+		let eligibleResolutions = 0;
+		f = fixture({ remoteName: 'ssh-remote', roots: [root], cwd: { scheme: 'vscode-local', path: cwd, fsPath: cwd }, rootScheme: scenario === 'foreign-scheme' ? 'vscode-remote' : 'file', rootAuthority: scenario === 'foreign-authority' ? 'foreign' : '',
+			getWorkspaceFolder: uri => scenario === 'workspace-changed' || !uri.path.startsWith(root + '/') ? undefined : { uri: rootUri },
+			realpath: async value => {
+				if (value === root) eligibleResolutions++;
+				const resolved = await fs.realpath(value);
+				if (scenario === 'trust-changed') f.state.trusted = false;
+				return resolved;
+			},
+		});
+		const s = shortcut(f);
+		await s.enable();
+		await f.handle(callbackUri(f));
+		if (scenario === 'symlink-root' || scenario === 'physical-root') {
+			assert.equal(s.opened.length, 1);
+			assert.equal(s.opened[0].path, path.join(root, 'child with spaces'));
+			assert.equal(s.opened[0].scheme, 'file');
+			assert.equal(await fs.realpath(s.opened[0].fsPath), await fs.realpath(cwd));
+		} else {
+			assert.deepEqual(s.opened, []);
+			assert.ok(f.warnings.length > 1);
+			assert.doesNotMatch(f.warnings.at(-1), /token=|windowId=|vscode:\/\/|tfui-canonical-/);
+		}
+		if (scenario.startsWith('foreign-')) assert.equal(eligibleResolutions, 0);
+		s.disposable.dispose();
+	});
+}

@@ -62,7 +62,7 @@ function fixture(directory, options = {}) {
 			},
 		},
 	};
-	const terminal = loadWithMocks('../out/terminal', { vscode });
+	const terminal = loadWithMocks('../out/terminal', { vscode, 'node:fs/promises': { ...fs, realpath: options.realpath || (async value => value) } });
 	const { registerTerminalLauncher, installTerminalLaunchers } = loadWithMocks('../out/terminalLauncher', { vscode, './terminal': terminal });
 	const context = {
 		extension: { id: options.extensionId || 'signageos.terraform-ui' },
@@ -358,3 +358,28 @@ for (const reason of ['failure', 'trust', 'disposal', 'foreign-route']) {
 		assert.doesNotMatch(f.messages.join(' '), /private callback|token=|windowId=/);
 	});
 }
+
+
+test('remote PATH callbacks map physical cwd onto a symlink workspace and reject escaping links', async t => {
+	const directory = await temporary(t);
+	const physical = path.join(directory, 'physical workspace');
+	const logical = path.join(directory, 'logical workspace');
+	const child = path.join(physical, 'child with spaces');
+	const outside = path.join(directory, 'outside');
+	await fs.mkdir(child, { recursive: true });
+	await fs.mkdir(outside);
+	await fs.symlink(physical, logical);
+	await fs.symlink(outside, path.join(physical, 'escape'));
+	const f = fixture(path.join(directory, 'storage'), { roots: [logical], remote: true, realpath: fs.realpath });
+	await f.enable();
+	await f.launcher.handleUri(f.request(child));
+	assert.equal(f.opened.length, 1);
+	assert.equal(f.opened[0].fsPath, path.join(logical, 'child with spaces'));
+	assert.equal(await fs.realpath(f.opened[0].fsPath), child);
+	for (const cwd of [outside, path.join(logical, 'escape')]) {
+		await f.launcher.handleUri(f.request(cwd));
+		assert.equal(f.opened.length, 1);
+		assert.match(f.messages.at(-1), /physically inside a root/);
+		assert.ok(!f.messages.at(-1).includes(directory));
+	}
+});
