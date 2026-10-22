@@ -1,8 +1,12 @@
-# Change Log
+# Changelog
+All notable changes to this project will be documented in this file.
 
-All notable changes to the "vscode-terraform-ui" extension will be documented in this file.
+The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
+and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
-Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
+Entries should be short and human-readable; for longer entries, use an indented list.
+
+`Changed` and `Removed` entries should be used only for breaking changes to the outward-facing API.
 
 ## [Unreleased]
 
@@ -22,7 +26,7 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 ### Fixed
 - Data source diff rendering
 
-## [0.1.0]
+## [0.1.0] - 2026-04-15
 ### Added
 - Initial release
 - Visual Terraform plan diff viewer with split-pane UI
