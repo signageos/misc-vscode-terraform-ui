@@ -1,11 +1,13 @@
 import { spawn } from 'node:child_process';
+import { parseSerializedTerminalQuery } from './terminalUri';
 
 const base = process.env.TFUI_URL;
 const cli = process.env.TFUI_CLI;
 const openArgument = process.env.TFUI_OPEN_ARG;
 if (
 	!base ||
-	!/^vscode(?:-insiders)?:\/\/[a-z0-9_-]+\.[a-z0-9_-]+\/launch\?token=[a-f0-9]{64}$/i.test(base) ||
+	!/^vscode(?:-insiders)?:\/\/[a-z0-9_-]+\.[a-z0-9_-]+\/(?:launch|terminal)\?[^#]+$/i.test(base) ||
+	!parseSerializedTerminalQuery(base.slice(base.indexOf('?') + 1)) ||
 	(cli !== 'code' && cli !== 'code-insiders') ||
 	(openArgument !== '--open-url' && openArgument !== '--openExternal')
 ) {

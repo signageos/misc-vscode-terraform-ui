@@ -22,11 +22,7 @@ function openExternalUri(version, location, preferredCwd) {
 }
 
 function handlerUri(location) {
-	const parsed = new URL(location);
-	return {
-		scheme: parsed.protocol.slice(0, -1), authority: parsed.host, path: parsed.pathname,
-		query: parsed.search.slice(1), fragment: parsed.hash.slice(1),
-	};
+	return require('vscode-uri').URI.parse(location);
 }
 
 module.exports = { openExternalUri, handlerUri };

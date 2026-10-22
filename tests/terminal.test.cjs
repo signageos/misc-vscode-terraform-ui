@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const Module = require('node:module');
 const path = require('node:path');
+const { uri: makeUri } = require('./fixtures/terminal-uri.cjs');
 const { openExternalUri, handlerUri } = require('./fixtures/remote-cli-transform.cjs');
 
 function fixture(options = {}) {
@@ -10,8 +11,8 @@ function fixture(options = {}) {
 		fsPath: '/second/team "quoted"/it\'s $HOME; stuff', query: '', fragment: '',
 		...options.cwd,
 	};
-	const folders = ['/first', '/second'].map((fsPath) => ({
-		uri: { scheme: cwd.scheme, authority: cwd.authority, fsPath },
+	const folders = (options.roots || ['/first', '/second']).map((fsPath) => ({
+		uri: makeUri({ scheme: options.rootScheme || cwd.scheme, authority: options.rootAuthority || cwd.authority, path: fsPath }),
 	}));
 	const commands = new Map();
 	const warnings = [];
@@ -23,7 +24,13 @@ function fixture(options = {}) {
 	let onClose;
 	const state = { trusted: true, ...options };
 	const vscode = {
-		env: { uriScheme: options.uriScheme || 'vscode', remoteName: options.remoteName },
+		env: { uriScheme: options.uriScheme || 'vscode', remoteName: options.remoteName,
+			asExternalUri: async target => {
+				if (options.resolve) return options.resolve(target, vscode, state);
+				return target.with({ query: target.query + '&windowId=14' });
+			},
+		},
+		Uri: { from: makeUri, joinPath: (base, ...parts) => makeUri({ ...base, path: path.join(base.path, ...parts) }) },
 		Disposable: class { constructor(dispose) { this.dispose = dispose; } },
 		FileType: { Directory: 2, File: 1 },
 		RelativePattern: class {
@@ -192,14 +199,15 @@ test('ordinary open command also requires workspace trust', async () => {
 
 function shortcut(f, id = 'signageos.terraform-ui') {
 	const opened = [];
-	const disposable = f.registerTerminalShortcut(id, async uri => opened.push(uri));
+	const disposable = f.registerTerminalShortcut(id, async uri => opened.push(uri), undefined, makeUri({ path: f.state.extensionPath || '/extension it\'s $safe' }));
 	return { opened, disposable, enable: () => f.commands.get('terraformUI.enableTerminalShortcut')() };
 }
 
 function callbackUri(f) {
 	const match = f.executed.at(-1).match(/'(vscode(?:-insiders)?:[^']+)'/);
 	const url = new URL(match[1]);
-	return { scheme: url.protocol.slice(0, -1), authority: url.host, path: url.pathname, query: url.search.slice(1), fragment: '' };
+	if (f.executed.at(-1).includes('TFUI_URL=')) url.search += '&cwd=' + Buffer.from(f.cwd.path).toString('base64url');
+	return { scheme: url.protocol.slice(0, -1), authority: url.host, path: url.pathname, query: decodeURIComponent(url.search.slice(1)), fragment: '' };
 }
 
 for (const shell of ['bash/zsh', 'PowerShell (pwsh)']) {
@@ -209,8 +217,8 @@ for (const shell of ['bash/zsh', 'PowerShell (pwsh)']) {
 		await s.enable();
 		assert.equal(f.executed.length, 1);
 		const uri = callbackUri(f);
-		assert.match(uri.query, /^token=[a-f0-9]{64}$/);
-		const call = `'code' --open-url 'vscode://signageos.terraform-ui/terminal?${uri.query}'`;
+		assert.match(uri.query, /^token=[a-f0-9]{64}&windowId=14$/);
+		const call = `'code' --open-url 'vscode://signageos.terraform-ui/terminal?${encodeURIComponent(uri.query)}'`;
 		assert.equal(f.executed[0], shell === 'bash/zsh' ? `function tfui() { ${call}; }` : `function tfui { & ${call} }`);
 		assert.doesNotMatch(f.executed[0], /HOME|second|cwd|\$args|\$@/);
 		assert.match(f.warnings[0], /clean, idle/);
@@ -389,9 +397,11 @@ for (const shell of ['bash/zsh', 'PowerShell (pwsh)']) {
 			const s = shortcut(f);
 			await s.enable();
 			const cli = uriScheme === 'vscode' ? 'code' : 'code-insiders';
-			assert.ok(f.executed[0].includes(`'${cli}' --openExternal '${uriScheme}://`));
+			if (shell === 'bash/zsh') assert.ok(f.executed[0].includes(`TFUI_CLI='${cli}' TFUI_OPEN_ARG='--openExternal'`));
+			else assert.ok(f.executed[0].includes(`'${cli}' --openExternal '${uriScheme}://`));
 			assert.doesNotMatch(f.executed[0], /--open-url/);
-			const location = f.executed[0].match(/'(vscode(?:-insiders)?:[^']+)'/)[1];
+			const callback = callbackUri(f);
+			const location = `${uriScheme}://${callback.authority}${callback.path}?${callback.query}`;
 			for (const version of ['1.93.0', '1.95.3']) {
 				const broken = openExternalUri(version, location, '/project');
 				assert.ok(broken.startsWith(`file:///project/${uriScheme}:/`));
@@ -401,8 +411,108 @@ for (const shell of ['bash/zsh', 'PowerShell (pwsh)']) {
 			const delivered = openExternalUri('1.96.0', location, '/project');
 			assert.equal(delivered, location);
 			await f.handle(handlerUri(delivered));
-			assert.deepEqual(s.opened, [f.cwd]);
+			assert.equal(s.opened.length, 1);
+			assert.equal(s.opened[0].path, f.cwd.path);
 			s.disposable.dispose();
 		});
 	}
 }
+
+
+test('remote function accepts only its owning window routing metadata and exact token', async () => {
+	const f = fixture({ remoteName: 'ssh-remote' });
+	const s = shortcut(f);
+	await s.enable();
+	const original = callbackUri(f);
+	for (const query of [original.query.replace('&windowId=14', ''), original.query.replace('windowId=14', 'windowId=15'), original.query + '&windowId=14', original.query + '&unknown=1', original.query + '&' + original.query.split('&')[0]]) {
+		await f.handle({ ...original, query });
+		assert.deepEqual(s.opened, []);
+		assert.doesNotMatch(f.warnings.at(-1), /token=|windowId=|vscode:\/\//);
+	}
+	await f.handle({ ...original, query: original.query.split('&').reverse().join('&') });
+	assert.equal(s.opened.length, 1);
+	assert.equal(s.opened[0].path, f.cwd.path);
+});
+
+for (const reason of ['failure', 'trust', 'terminal', 'disposal', 'foreign-route']) {
+	test(`function externalization is fail-closed after awaited ${reason}`, async () => {
+		let s;
+		const f = fixture({ resolve: async (target, vscode, state) => {
+			await Promise.resolve();
+			if (reason === 'failure') throw new Error('private callback');
+			if (reason === 'trust') state.trusted = false;
+			if (reason === 'terminal') vscode.window.terminals = [];
+			if (reason === 'disposal') s.disposable.dispose();
+			return target.with(reason === 'foreign-route' ? { authority: 'other.extension' } : { query: target.query + '&windowId=14' });
+		} });
+		s = shortcut(f);
+		await s.enable();
+		assert.deepEqual(f.executed, []);
+		assert.doesNotMatch([...f.errors, ...f.warnings].join(' '), /private callback|token=|windowId=/);
+	});
+}
+
+// VS Code 1.96 exposes remote shell-integration cwd as vscode-local. Never relabel it.
+test('remote bash uses process cwd and host-local roots, not ambiguous shell-integration URI', async () => {
+	const f = fixture({ remoteName: 'ssh-remote', cwd: { scheme: 'vscode-local' }, rootScheme: 'file', folderScheme: 'file' });
+	const s = shortcut(f);
+	await s.enable();
+	assert.match(f.executed[0], /TFUI_URL=/);
+	assert.match(f.executed[0], /ELECTRON_RUN_AS_NODE=1/);
+	await f.handle(callbackUri(f));
+	assert.equal(s.opened.length, 1);
+	assert.equal(s.opened[0].scheme, 'file');
+	assert.equal(s.opened[0].path, f.cwd.path);
+	assert.equal(f.cwd.scheme, 'vscode-local');
+});
+
+for (const reason of ['foreign-root', 'ui-side-root', 'outside', 'missing-cwd', 'duplicate-cwd', 'closed', 'untrusted']) {
+	test(`remote process-cwd function rejects ${reason}`, async () => {
+		const f = fixture({ remoteName: 'ssh-remote', ...(reason === 'foreign-root' ? { rootAuthority: 'foreign' } : {}), ...(reason === 'ui-side-root' ? { rootScheme: 'vscode-local' } : {}) });
+		const s = shortcut(f);
+		await s.enable();
+		const callback = callbackUri(f);
+		if (reason === 'outside') callback.query = callback.query.replace(/cwd=[^&]+/, 'cwd=' + Buffer.from('/other').toString('base64url'));
+		if (reason === 'missing-cwd') callback.query = callback.query.replace(/&cwd=[^&]+/, '');
+		if (reason === 'duplicate-cwd') callback.query += '&cwd=Zm9v';
+		if (reason === 'closed') f.close(f.vscode.window.activeTerminal);
+		if (reason === 'untrusted') f.state.trusted = false;
+		await f.handle(callback);
+		assert.deepEqual(s.opened, []);
+		assert.ok(f.warnings.length > 1);
+		assert.doesNotMatch(f.warnings.at(-1), /token=|windowId=|vscode:\/\//);
+	});
+}
+
+test('actual remote bash function preserves cwd, serialized minted metadata and quoted extension/runtime arguments', async t => {
+	const fs = require('node:fs/promises');
+	const { spawnSync } = require('node:child_process');
+	const root = await fs.mkdtemp(path.join(require('node:os').tmpdir(), 'tfui-function-'));
+	t.after(() => fs.rm(root, { recursive: true, force: true }));
+	const cwd = path.join(root, "cwd space it's $HOME; $(no) & %?#é");
+	const extensionPath = path.join(root, "extension it's $HOME; $(no)");
+	const bin = path.join(root, 'bin');
+	await fs.mkdir(cwd);
+	await fs.mkdir(path.join(extensionPath, 'out'), { recursive: true });
+	await fs.mkdir(bin);
+	for (const name of ['terminalLauncherProcess.js', 'terminalUri.js']) await fs.copyFile(path.resolve(__dirname, '../out', name), path.join(extensionPath, 'out', name));
+	const capture = path.join(root, 'argv.json');
+	await fs.writeFile(path.join(bin, 'code'), '#!' + process.execPath + "\nrequire('node:fs').writeFileSync(process.env.CAPTURE, JSON.stringify(process.argv.slice(2)));", { mode: 0o700 });
+	const f = fixture({ remoteName: 'ssh-remote', roots: [root], extensionPath, cwd: { path: cwd, fsPath: cwd, scheme: 'vscode-local' }, rootScheme: 'file', folderScheme: 'file',
+		resolve: async target => target.with({ query: target.query + '&windowId=14&nonce=quoted%27%26%3D%25' }) });
+	const s = shortcut(f);
+	await s.enable();
+	assert.equal(f.executed.length, 1);
+	const result = spawnSync('bash', ['--noprofile', '--norc', '-c', f.executed[0] + '; tfui'], { cwd, env: { ...process.env, PATH: bin + ':' + process.env.PATH, CAPTURE: capture }, encoding: 'utf8' });
+	assert.equal(result.status, 0, result.stderr);
+	const argv = JSON.parse(await fs.readFile(capture, 'utf8'));
+	assert.equal(argv.length, 2);
+	assert.equal(argv[0], '--openExternal');
+	const callback = handlerUri(openExternalUri('1.96.0', argv[1], cwd));
+	assert.match(callback.query, /&windowId=14&nonce=quoted%27%26%3D%25&cwd=/);
+	await f.handle(callback);
+	assert.equal(s.opened.length, 1);
+	assert.equal(s.opened[0].path, cwd);
+	assert.equal(s.opened[0].scheme, 'file');
+	assert.equal(f.cwd.scheme, 'vscode-local');
+});

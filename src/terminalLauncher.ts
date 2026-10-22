@@ -2,8 +2,9 @@ import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
-import { openCurrentFolder } from './terminal';
+import { openHostFolder } from './terminal';
 import { hostStoragePath } from './hostStorage';
+import { matchesTerminalQuery, parseTerminalQuery, resolveTerminalUri } from './terminalUri';
 
 export async function installTerminalLaunchers(directory: string): Promise<void> {
 	await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -24,6 +25,7 @@ export function registerTerminalLauncher(
 	collection.persistent = false;
 	collection.clear();
 	let token: string | undefined;
+	const callbackQueries = new Set<string>();
 	let disposed = false;
 	const extensionId = context.extension.id;
 	const scheme = vscode.env.uriScheme;
@@ -66,7 +68,17 @@ export function registerTerminalLauncher(
 			if (directory.includes(':')) throw new Error('Unsupported storage path');
 			await installTerminalLaunchers(directory);
 			if (disposed || !vscode.workspace.isTrusted) return;
-			token = token || randomBytes(32).toString('hex');
+			const nextToken = token || randomBytes(32).toString('hex');
+			const target = vscode.Uri.from({
+				scheme,
+				authority: extensionId,
+				path: '/launch',
+				query: `token=${nextToken}`,
+			});
+			const external = await resolveTerminalUri(target, vscode.env.asExternalUri);
+			if (disposed || !vscode.workspace.isTrusted) return;
+			token = nextToken;
+			callbackQueries.add(external.query);
 			const options = { applyAtProcessCreation: true, applyAtShellIntegration: false };
 			collection.description = 'Terraform UI typed launchers (new terminals only)';
 			collection.replace('TFUI_RUNTIME', process.execPath, options);
@@ -75,7 +87,7 @@ export function registerTerminalLauncher(
 				vscode.Uri.joinPath(context.extensionUri, 'out', 'terminalLauncherProcess.js').fsPath,
 				options,
 			);
-			collection.replace('TFUI_URL', `${scheme}://${extensionId}/launch?token=${token}`, options);
+			collection.replace('TFUI_URL', external.toString(), options);
 			collection.replace('TFUI_CLI', scheme === 'vscode-insiders' ? 'code-insiders' : 'code', options);
 			collection.replace('TFUI_OPEN_ARG', vscode.env.remoteName ? '--openExternal' : '--open-url', options);
 			collection.prepend('PATH', directory + path.delimiter, options);
@@ -93,48 +105,24 @@ export function registerTerminalLauncher(
 				await vscode.window.showWarningMessage('Trust this workspace before opening Terraform UI.');
 				return;
 			}
-			const match =
-				!uri.fragment && uri.query.length <= 65536
-					? /^token=([a-f0-9]{64})&cwd=([A-Za-z0-9_-]+)$/.exec(uri.query)
-					: null;
-			if (!token || !match || match[1] !== token) {
+			const parameters = !uri.fragment ? parseTerminalQuery(uri.query, true) : undefined;
+			if (
+				!token ||
+				!parameters ||
+				parameters.get('token') !== token ||
+				![...callbackQueries].some((query) => matchesTerminalQuery(uri.query, query, true))
+			) {
 				await vscode.window.showWarningMessage(
 					'Terraform UI did not open: this launcher is invalid or belongs to another window or an earlier extension session. Focus the window where you enabled it. After a reload, run "Terraform UI: Enable tfui / terraform-ui in New Terminals" again and create a NEW terminal.',
 				);
 				return;
 			}
-			const encoded = match[2];
-			const cwd = Buffer.from(encoded, 'base64url').toString('utf8');
-			if (
-				Buffer.from(cwd, 'utf8').toString('base64url') !== encoded ||
-				cwd.includes('\0') ||
-				!path.posix.isAbsolute(cwd) ||
-				path.posix.normalize(cwd) !== cwd
-			) {
-				await vscode.window.showWarningMessage(
-					'Terraform UI did not open: the launcher did not provide a supported extension-host folder. Enable the launchers again and create a NEW terminal.',
-				);
-				return;
-			}
-			const roots = vscode.workspace.workspaceFolders || [];
-			for (const root of roots) {
-				// A workspace extension host sees its own filesystem as file://, even remotely:
-				// VS Code transforms vscode-remote URIs on the UI/agent boundary.
-				// Never reinterpret this process's cwd as a different host's filesystem.
-				if (root.uri.scheme !== 'file' || root.uri.authority || root.uri.query || root.uri.fragment) continue;
-				const relative = path.posix.relative(root.uri.path, cwd);
-				if (relative === '..' || relative.startsWith('../') || path.posix.isAbsolute(relative)) continue;
-				const target = root.uri.with({ path: cwd, query: '', fragment: '' });
-				await openCurrentFolder(target, open);
-				return;
-			}
-			await vscode.window.showWarningMessage(
-				'Open the terminal folder in this extension host’s workspace first. Foreign hosts are not supported.',
-			);
+			await openHostFolder(parameters.get('cwd') || '', open);
 		},
 		dispose() {
 			disposed = true;
 			token = undefined;
+			callbackQueries.clear();
 			collection.clear();
 			command.dispose();
 		},

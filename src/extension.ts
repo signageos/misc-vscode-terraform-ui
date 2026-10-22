@@ -43,7 +43,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	context.subscriptions.push(
 		vscode.commands.registerCommand('terraformUI.open', open),
 		registerTerminalCommand(open),
-		registerTerminalShortcut(context.extension.id, open, launcher),
+		registerTerminalShortcut(context.extension.id, open, launcher, context.extensionUri),
 		launcher,
 	);
 }

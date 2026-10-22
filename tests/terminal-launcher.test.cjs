@@ -7,10 +7,7 @@ const { spawnSync } = require('node:child_process');
 const { loadWithMocks } = require('./helpers.cjs');
 const { openExternalUri, handlerUri } = require('./fixtures/remote-cli-transform.cjs');
 
-function uri(parts) {
-	return { scheme: 'file', authority: '', path: '', query: '', fragment: '', ...parts,
-		get fsPath() { return this.path; }, with(change) { return uri({ ...this, ...change }); } };
-}
+const { uri } = require('./fixtures/terminal-uri.cjs');
 
 function fixture(directory, options = {}) {
 	const commands = new Map();
@@ -27,8 +24,13 @@ function fixture(directory, options = {}) {
 	};
 	const vscode = {
 		UIKind: { Desktop: 1 },
-		env: { uiKind: options.web ? 2 : 1, uriScheme: options.uriScheme || 'vscode', remoteName: options.remote ? 'ssh-remote' : undefined },
-		Uri: { joinPath: (base, ...parts) => uri({ ...base, path: path.join(base.path, ...parts) }) },
+		env: { uiKind: options.web ? 2 : 1, uriScheme: options.uriScheme || 'vscode', remoteName: options.remote ? 'ssh-remote' : undefined,
+			asExternalUri: async target => {
+				if (options.resolve) return options.resolve(target, vscode, state);
+				return target.with({ query: target.query + '&windowId=14' });
+			},
+		},
+		Uri: { from: uri, joinPath: (base, ...parts) => uri({ ...base, path: path.join(base.path, ...parts) }) },
 		FileType: { Directory: 2 },
 		RelativePattern: class { constructor(base, pattern) { this.base = base; this.pattern = pattern; } },
 		commands: { registerCommand(name, callback) { commands.set(name, callback); return { dispose() { commands.delete(name); } }; } },
@@ -73,7 +75,7 @@ function fixture(directory, options = {}) {
 		request(cwd = '/second/nested') {
 			const base = new URL(mutations.get('TFUI_URL').value);
 			return uri({ scheme: base.protocol.slice(0, -1), authority: base.host, path: base.pathname,
-				query: base.search.slice(1) + '&cwd=' + Buffer.from(cwd).toString('base64url') });
+				query: decodeURIComponent(base.search.slice(1)) + '&cwd=' + Buffer.from(cwd).toString('base64url') });
 		},
 	};
 }
@@ -100,7 +102,7 @@ test('real POSIX helpers preserve literal cwd and argv through desktop CLI and r
 	const record = path.join(root, 'record.json');
 	const extension = path.join(root, 'extension \' \" $HOME; $(no)');
 	await fs.mkdir(path.join(extension, 'out'), { recursive: true });
-	await fs.copyFile(path.resolve(__dirname, '../out/terminalLauncherProcess.js'), path.join(extension, 'out/terminalLauncherProcess.js'));
+	for (const name of ['terminalLauncherProcess.js', 'terminalUri.js']) await fs.copyFile(path.resolve(__dirname, '../out', name), path.join(extension, 'out', name));
 	const runtime = path.join(root, 'runtime \' \" $HOME; $(no)');
 	await fs.symlink(process.execPath, runtime);
 	const stub = '#!/usr/bin/env node\nrequire("node:fs").writeFileSync(process.env.RECORD, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), electron: process.env.ELECTRON_RUN_AS_NODE })); process.exit(Number(process.env.CLI_EXIT || 0));\n';
@@ -325,3 +327,34 @@ test('extension engine minimum includes the first remote CLI arbitrary-scheme fi
 	assert.equal(manifest.engines.vscode, '^1.96.0');
 	assert.deepEqual(lock.packages[''].engines, manifest.engines);
 });
+
+
+test('remote PATH callback requires exactly the minted window metadata and unique application parameters', async t => {
+	const f = fixture(await temporary(t), { remote: true });
+	await f.enable();
+	const original = f.request('/second/folder with spaces');
+	assert.match(original.query, /&windowId=14&cwd=/);
+	for (const query of [original.query.replace('&windowId=14', ''), original.query.replace('windowId=14', 'windowId=15'), original.query + '&windowId=14', original.query + '&unknown=1', original.query + '&cwd=Lw', original.query + '&' + original.query.split('&')[0]]) {
+		await f.launcher.handleUri({ ...original, query });
+		assert.deepEqual(f.opened, []);
+		assert.doesNotMatch(f.messages.at(-1), /token=|windowId=|folder with spaces|vscode:\/\//);
+	}
+	await f.launcher.handleUri({ ...original, query: original.query.split('&').reverse().join('&') });
+	assert.equal(f.opened[0].path, '/second/folder with spaces');
+});
+
+for (const reason of ['failure', 'trust', 'disposal', 'foreign-route']) {
+	test(`PATH externalization never mutates terminal environment after awaited ${reason}`, async t => {
+		let f;
+		f = fixture(await temporary(t), { resolve: async (target, vscode, state) => {
+			await Promise.resolve();
+			if (reason === 'failure') throw new Error('private callback');
+			if (reason === 'trust') state.trusted = false;
+			if (reason === 'disposal') f.launcher.dispose();
+			return target.with(reason === 'foreign-route' ? { scheme: 'https' } : { query: target.query + '&windowId=14' });
+		} });
+		await f.enable();
+		assert.equal(f.mutations.size, 0);
+		assert.doesNotMatch(f.messages.join(' '), /private callback|token=|windowId=/);
+	});
+}
