@@ -10,7 +10,7 @@ A visual diff tool for Terraform plan changes with targeted apply support.
 - **Resource List**: Left panel shows all resources to be changed with action badges (create/update/delete/replace)
 - **Diff Viewer**: Click any resource to see its attribute-level diff on the right panel
 - **Targeted Apply**: Select specific resources with checkboxes and apply only those changes using `-target`
-- **Live Terminal Output**: See real-time `terraform` command output in the bottom panel
+- **Live Terminal Output**: See real-time `terraform` command output in the bottom panel when private environment overrides are not configured
 - **CLI Confirmation**: Type "yes" to confirm apply, just like the standard Terraform CLI
 - **Auto-Detection**: Automatically finds all Terraform roots in your workspace
 
@@ -39,6 +39,21 @@ Init runs in the selected root without a shell. Enter one JSON string per argume
 Init output and raw errors are withheld because backend diagnostics can echo credentials. Terraform CLI argument/logging environment overrides are removed for Init. Arguments are still visible to operating-system process inspection, and Terraform itself can write backend configuration to `.terraform`; SecretStorage does not protect Terraform's files. Use a secure terminal for diagnostics and do not put credentials in shared backend files.
 
 All operations require workspace trust. Only one Terraform process runs at a time across Terraform UI panels. **Cancel operation** requests termination and waits for the process to exit; it does not roll back Terraform's work. Run a fresh plan after Init. Init can download providers/modules and configure backend state; review arguments before running it.
+
+### Execution settings and credentials
+
+Terraform UI spawns processes on the **extension host**. It inherits that host's environment, not exports from an integrated terminal, `direnv`, shell aliases, or shell startup files. Changing or resetting a terminal does not update the running extension host's inherited environment. No terminal environment is automatically captured and no rc file is sourced.
+
+Select a root and click **Execution settings**. Two masked native VS Code inputs configure:
+
+- A literal executable name (default `terraform`) or **absolute path**, including paths with spaces. Do not quote the path or add arguments. Bare names resolve using the execution environment's `PATH`. A selected wrapper is executable code: trust and review it yourself; the extension never adds a shell.
+- A JSON object of explicit environment overrides, for example `{"GOOGLE_APPLICATION_CREDENTIALS":"/private/account.json","HTTPS_PROXY":"http://proxy.example:8080","UNWANTED_VARIABLE":null}`. String values override inherited variables, `null` removes them, and an empty string remains empty. Paste the complete JSON object into the masked input. Values are literal, without `$VAR` expansion. Use `{}` to reset overrides and `terraform` to reset the executable. Canceling either dialog saves nothing.
+
+Both executable and overrides are stored together in SecretStorage using the same private host/root namespace as Init arguments, never ordinary workspace settings, webview messages, logs, or cross-root suggestion history. Configure each root and execution host separately; remote paths, executables and credential files must exist on the remote extension host, not merely the local client. Unavailable private host storage or SecretStorage blocks execution rather than silently falling back. Clearing private host storage loses the references to saved settings. The executable and credential files themselves remain your responsibility; SecretStorage protects saved values, not process environments, files or provider caches.
+
+Plan and its Show subprocess use one executable/environment snapshot. Init and Apply use the same settings mechanism. All operations require workspace trust; settings are not imported from repository-controlled VS Code configuration. Terraform CLI argument, input, automation and logging environment overrides are reserved: explicit overrides are rejected, inherited `TF_CLI_ARGS*`, `TF_LOG*`, `TF_INPUT` and `TF_IN_AUTOMATION` controls are removed, and the extension sets its automation/noninteractive controls. Review a fresh plan after changing settings.
+
+With any environment overrides configured (including removals), raw Plan/Show/Apply output is withheld to avoid credential echoes, even across output chunks. Apply still exposes a fixed confirmation prompt. Diagnostics report the operation and default/custom executable without paths or environment values; raw process and JSON parse errors are withheld. Exact configured nonempty string values are masked in structured plan strings/attribute keys, and matching numeric attribute values are masked. Masking is display-only and can redact coincidental matches, especially short values. Each displayed row has an opaque plan-scoped selection ID; Apply resolves it to the original address on the host, never to redacted display text. Actions and resource mode are not redacted. Apply requires the same root and saved executable/environment settings used by that plan; changes from another panel or window require a fresh plan. A failed/new plan or attempted Apply invalidates previous selections. This is not a guarantee against provider-encoded, transformed, or file-derived secrets: inspect only trusted plans and use a secure terminal for detailed diagnostics. Without overrides, normal live provider output remains visible and can contain inherited credentials; Init output is always withheld. These settings provide explicit environment control, not automatic discovery or diagnosis of authentication failures.
 
 ### Multiline diffs
 

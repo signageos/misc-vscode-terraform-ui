@@ -217,7 +217,7 @@ test('actual desktop vscode-userdata Init storage persists across instances with
 	await first.save('/same/root', '["-upgrade"]');
 	assert.equal(await new InitSettings(secrets, state, storage).load('/same/root'), '["-upgrade"]');
 	const remote = initStorageFixture(t, { remoteName: 'ssh-remote' });
-	await assert.rejects(new remote.InitSettings(secrets, state, storage).load('/same/root'), /private host storage/);
+	await assert.rejects(new remote.InitSettings(secrets, state, storage).load('/same/root'), /[Pp]rivate host storage/);
 });
 
 function initStorageFixture(t, options = {}) {
@@ -301,8 +301,8 @@ test('Init namespace read/write errors, invalid files and unsupported storage fa
 	fs.symlinkSync(uri('target').fsPath, uri('symlink').fsPath);
 	for (const storageUri of invalidUris) {
 		const settings = new InitSettings(secrets, state, storageUri);
-		await assert.rejects(settings.load('/same/root'), { message: 'Init private host storage is unavailable.' });
-		await assert.rejects(settings.save('/same/root', '[]'), { message: 'Init private host storage is unavailable.' });
+		await assert.rejects(settings.load('/same/root'), { message: 'Private host storage is unavailable.' });
+		await assert.rejects(settings.save('/same/root', '[]'), { message: 'Private host storage is unavailable.' });
 	}
 	for (const operation of ['readFileSync', 'writeFileSync']) {
 		const storageUri = uri(operation);
@@ -311,10 +311,11 @@ test('Init namespace read/write errors, invalid files and unsupported storage fa
 			fs.writeFileSync(path.join(storageUri.fsPath, 'init-secret-namespace'), 'a'.repeat(64));
 		}
 		const mockedFs = { ...fs, [operation]: () => { throw new Error('SECRET filesystem details'); } };
-		const { InitSettings: FailingSettings } = loadWithMocks('../out/initSettings', { fs: mockedFs, vscode: {} });
+		const { HostSecrets } = loadWithMocks('../out/hostSecrets', { fs: mockedFs });
+		const { InitSettings: FailingSettings } = loadWithMocks('../out/initSettings', { './hostSecrets': { HostSecrets }, vscode: {} });
 		const settings = new FailingSettings(secrets, state, storageUri);
-		await assert.rejects(settings.load('/same/root'), { message: 'Init private host storage is unavailable.' });
-		await assert.rejects(settings.save('/same/root', '[]'), { message: 'Init private host storage is unavailable.' });
+		await assert.rejects(settings.load('/same/root'), { message: 'Private host storage is unavailable.' });
+		await assert.rejects(settings.save('/same/root', '[]'), { message: 'Private host storage is unavailable.' });
 	}
 	assert.equal(secretCalls, 0);
 });
@@ -324,7 +325,7 @@ test('Unavailable private host storage blocks panel Init before SecretStorage or
 	const ui = createPanel();
 	let secretCalls = 0;
 	let launches = 0;
-	ui.instance.initSettings.storageUri = { scheme: 'unsupported', authority: 'SECRET', fsPath: '/SECRET' };
+	ui.instance.initSettings.hostSecrets.storageUri = { scheme: 'unsupported', authority: 'SECRET', fsPath: '/SECRET' };
 	ui.secrets.get = ui.secrets.store = async () => { secretCalls++; };
 	ui.instance.runner.init = async () => { launches++; };
 	try {

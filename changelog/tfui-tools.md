@@ -1,6 +1,6 @@
 ### Added
 - (public) Initialize Terraform roots with explicit arguments, per-root saved settings, and safe flag suggestions.
-
+- (public) Configure the Terraform executable and environment separately for each root.
 - (public) Open the integrated terminal’s current Terraform folder by typing tfui or terraform-ui in opt-in new POSIX terminals, with keyboard and existing-terminal fallbacks; requires VS Code 1.96.0 or newer.
 
 ### Fixed

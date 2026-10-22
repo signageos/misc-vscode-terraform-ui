@@ -21,7 +21,7 @@ test('multiline regression: actual rendered DOM colors every changed line and pr
 	const ui = createPanel();
 	try {
 		const resource = fixture();
-		ui.deliver({ type: 'planComplete', plan: { resourceChanges: [{ ...resource, diffText: buildResourceDiff(resource) }] } });
+		ui.deliver({ type: 'planComplete', plan: { resourceChanges: [{ ...resource, selectionId: 'row-1', diffText: buildResourceDiff(resource) }] } });
 		const rows = [...ui.dom.window.document.querySelectorAll('#diffContent > div')];
 		assert.equal(rows.find((row) => row.textContent.includes('old two')).className, 'line-remove');
 		assert.equal(rows.find((row) => row.textContent.includes('new two')).className, 'line-add');
@@ -70,7 +70,7 @@ test('carriage returns and literal backslash-r remain distinguishable in both di
 		assert.equal(text.includes('\r'), false);
 		const ui = createPanel();
 		try {
-			ui.deliver({ type: 'planComplete', plan: { resourceChanges: [{ ...resource, diffText: text }] } });
+			ui.deliver({ type: 'planComplete', plan: { resourceChanges: [{ ...resource, selectionId: 'row-1', diffText: text }] } });
 			const rows = [...ui.dom.window.document.querySelectorAll('#diffContent > div')];
 			assert.equal(rows.find(row => row.textContent === '  - ' + removed).className, 'line-remove');
 			assert.equal(rows.find(row => row.textContent === '  + ' + added).className, 'line-add');
@@ -99,7 +99,7 @@ test('actual DOM treats templates and malicious HTML as text, including unchange
 	try {
 		const content = '<img src=x onerror="window.injected=true">\n<script>window.injected=true</script>\n${notJavaScript}\n';
 		const resource = { ...fixture(), address: '<img src=x onerror="window.injected=true">', after: { content, unchanged: fixture().before.unchanged } };
-		ui.deliver({ type: 'planComplete', plan: { resourceChanges: [{ ...resource, diffText: buildResourceDiff(resource) }, { ...fixture(), diffText: buildResourceDiff(fixture()) }] } });
+		ui.deliver({ type: 'planComplete', plan: { resourceChanges: [{ ...resource, selectionId: 'row-1', diffText: buildResourceDiff(resource) }, { ...fixture(), selectionId: 'row-2', diffText: buildResourceDiff(fixture()) }] } });
 		const doc = ui.dom.window.document;
 		assert.equal(doc.querySelector('#diffContent img'), null);
 		assert.equal(doc.querySelector('#resourceItems img'), null);

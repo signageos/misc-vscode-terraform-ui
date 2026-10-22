@@ -1,8 +1,19 @@
 import * as vscode from 'vscode';
-import { TerraformRunner, InitCanceledError } from './terraformRunner';
+import { randomUUID } from 'crypto';
+import { TerraformRunner, InitCanceledError, TerraformExecutionError } from './terraformRunner';
 import { buildResourceDiff } from './planParser';
 import { InitSettings } from './initSettings';
-import { TerraformPlan, WebviewMessage, RootSettings, DEFAULT_ROOT_SETTINGS } from './types';
+import { HostSecrets } from './hostSecrets';
+import { ExecutionSettings } from './executionSettings';
+import {
+	ExecutionSettingsValue,
+	executionIdentity,
+	executionSnapshot,
+	maskPlanForDisplay,
+	parseEnvironment,
+	validateExecutable,
+} from './execution';
+import { WebviewMessage, RootSettings, DEFAULT_ROOT_SETTINGS } from './types';
 
 export class TerraformUIPanel {
 	public static readonly viewType = 'terraformUI';
@@ -12,12 +23,17 @@ export class TerraformUIPanel {
 	private static running = false;
 	private readonly runner: TerraformRunner;
 	private readonly initSettings: InitSettings;
+	private readonly executionSettings: ExecutionSettings;
 	private readonly extensionUri: vscode.Uri;
 	private readonly globalState: vscode.Memento;
 	private disposables: vscode.Disposable[] = [];
 	private ownsOperation = false;
 	private cancelRequested = false;
-	private currentPlan: TerraformPlan | null = null;
+	private currentPlan: {
+		root: string;
+		executionIdentity: string;
+		targets: Map<string, string>;
+	} | null = null;
 	private applyHandle: ReturnType<TerraformRunner['apply']> | null = null;
 
 	public static create(
@@ -63,6 +79,15 @@ export class TerraformUIPanel {
 		this.globalState = globalState;
 		this.runner = TerraformUIPanel.sharedRunner;
 		this.initSettings = new InitSettings(secrets, globalState, storageUri);
+		this.executionSettings = new ExecutionSettings(
+			new HostSecrets(
+				secrets,
+				storageUri,
+				storageUri.scheme === 'vscode-userdata' &&
+					vscode.env.uiKind === vscode.UIKind.Desktop &&
+					!vscode.env.remoteName,
+			),
+		);
 
 		this.panel.webview.html = this.getHtmlContent();
 
@@ -92,7 +117,12 @@ export class TerraformUIPanel {
 			});
 			return;
 		}
-		if (message.type === 'runInit' || message.type === 'runPlan' || message.type === 'applyTargets') {
+		if (
+			message.type === 'runInit' ||
+			message.type === 'runPlan' ||
+			message.type === 'applyTargets' ||
+			message.type === 'configureExecution'
+		) {
 			if (TerraformUIPanel.running) {
 				this.postMessage({ type: 'operationError', error: 'A Terraform operation is already running.' });
 				return;
@@ -102,6 +132,9 @@ export class TerraformUIPanel {
 			this.cancelRequested = false;
 		}
 		switch (message.type) {
+			case 'configureExecution':
+				await this.configureExecution(message.root);
+				break;
 			case 'runInit':
 				await this.runInit(message.root, message.arguments);
 				break;
@@ -129,7 +162,7 @@ export class TerraformUIPanel {
 				break;
 
 			case 'applyTargets':
-				this.runApply(message.root, message.targets, message.parallelism);
+				await this.runApply(message.root, message.targets, message.parallelism);
 				break;
 
 			case 'confirmApply':
@@ -174,11 +207,12 @@ export class TerraformUIPanel {
 			await this.initSettings.save(root, args);
 			if (this.cancelRequested) throw new InitCanceledError();
 			if (!vscode.workspace.isTrusted) throw new Error('Workspace trust is required.');
-			await this.runner.init(root, args);
+			const execution = await this.loadExecution(root);
+			await this.runner.init(root, args, execution);
 			this.currentPlan = null;
 			this.postMessage({ type: 'initComplete' });
 		} catch (error: unknown) {
-			if (error instanceof InitCanceledError) {
+			if (error instanceof InitCanceledError || this.cancelRequested) {
 				this.postMessage({ type: 'initError', error: 'Init canceled.' });
 			} else {
 				this.postMessage({
@@ -193,45 +227,74 @@ export class TerraformUIPanel {
 	}
 
 	private async runPlan(root: string, parallelism: number): Promise<void> {
+		this.currentPlan = null;
 		this.postMessage({ type: 'planStarted' });
 
 		try {
+			const execution = await this.loadExecution(root);
 			const plan = await this.runner.plan(
 				root,
 				(data) => {
 					this.postMessage({ type: 'planOutput', data });
 				},
 				parallelism,
+				execution,
 			);
 
-			this.currentPlan = plan;
-
-			// Enrich plan with diff text for each resource
-			const enrichedChanges = plan.resourceChanges.map((rc) => ({
-				...rc,
-				diffText: buildResourceDiff(rc),
-			}));
+			const targets = new Map<string, string>();
+			const display = maskPlanForDisplay(plan, executionSnapshot(execution));
+			const enrichedChanges = display.resourceChanges.map((rc, index) => {
+				const selectionId = randomUUID();
+				targets.set(selectionId, plan.resourceChanges[index].address);
+				return { ...rc, selectionId, diffText: buildResourceDiff(rc) };
+			});
+			this.currentPlan = { root, executionIdentity: executionIdentity(execution), targets };
 
 			this.postMessage({
 				type: 'planComplete',
-				plan: { ...plan, resourceChanges: enrichedChanges },
+				plan: { ...display, resourceChanges: enrichedChanges },
 			});
-		} catch (err: unknown) {
-			const errorMsg = err instanceof Error ? err.message : String(err);
-			this.postMessage({ type: 'planError', error: errorMsg });
+		} catch (error: unknown) {
+			this.postMessage({
+				type: 'planError',
+				error: this.cancelRequested
+					? 'Plan canceled.'
+					: error instanceof TerraformExecutionError
+						? error.message
+						: 'Plan failed. Check execution settings, SecretStorage, Terraform installation and provider access. Raw errors are withheld.',
+			});
 		} finally {
 			TerraformUIPanel.running = false;
 			this.ownsOperation = false;
 		}
 	}
 
-	private runApply(root: string, targets: string[], parallelism: number): void {
+	private async runApply(root: string, targets: string[], parallelism: number): Promise<void> {
 		this.postMessage({ type: 'applyStarted' });
 
 		try {
+			const planned = this.currentPlan;
+			const execution = await this.loadExecution(root);
+			if (
+				!planned ||
+				planned !== this.currentPlan ||
+				planned.root !== root ||
+				planned.executionIdentity !== executionIdentity(execution) ||
+				targets.length === 0 ||
+				targets.some((id) => !planned.targets.has(id))
+			) {
+				this.currentPlan = null;
+				throw new TerraformExecutionError(
+					'Plan selection or execution settings changed. Run a fresh plan before Apply.',
+				);
+			}
+			const addresses = targets
+				.map((id) => planned.targets.get(id))
+				.filter((address): address is string => address !== undefined);
+			this.currentPlan = null;
 			this.applyHandle = this.runner.apply(
 				root,
-				targets,
+				addresses,
 				(data) => {
 					this.postMessage({ type: 'applyOutput', data });
 
@@ -241,6 +304,7 @@ export class TerraformUIPanel {
 					}
 				},
 				parallelism,
+				execution,
 			);
 
 			this.applyHandle.process.on('close', (code) => {
@@ -250,16 +314,84 @@ export class TerraformUIPanel {
 				this.postMessage({ type: 'applyComplete', success: code === 0 });
 			});
 
-			this.applyHandle.process.on('error', (err) => {
+			this.applyHandle.process.on('error', () => {
 				TerraformUIPanel.running = false;
 				this.ownsOperation = false;
 				this.applyHandle = null;
-				this.postMessage({ type: 'applyError', error: err.message });
+				this.postMessage({
+					type: 'applyError',
+					error: 'Could not start Terraform Apply. Check execution settings and host access. Raw errors are withheld.',
+				});
 			});
-		} catch {
+		} catch (error: unknown) {
+			this.currentPlan = null;
 			TerraformUIPanel.running = false;
 			this.ownsOperation = false;
-			this.postMessage({ type: 'applyError', error: 'Could not start Terraform Apply.' });
+			this.postMessage({
+				type: 'applyError',
+				error: this.cancelRequested
+					? 'Apply canceled.'
+					: error instanceof TerraformExecutionError
+						? error.message
+						: 'Could not start Terraform Apply. Check execution settings, SecretStorage and host access.',
+			});
+		}
+	}
+
+	private async loadExecution(root: string): Promise<ExecutionSettingsValue> {
+		const execution = await this.executionSettings.load(root);
+		if (!vscode.workspace.isTrusted || this.cancelRequested) throw new Error('Execution is not authorized.');
+		return execution;
+	}
+
+	private async configureExecution(root: string): Promise<void> {
+		this.currentPlan = null;
+		this.postMessage({ type: 'executionSettingsStarted' });
+		try {
+			const current = await this.loadExecution(root);
+			const executable = await vscode.window.showInputBox({
+				title: 'Terraform UI: executable for selected root',
+				prompt: `Runs on the ${vscode.env.remoteName ? 'remote' : 'local'} extension host, not in the terminal. Enter a literal executable name or absolute path; no arguments or shell startup files.`,
+				value: current.executable,
+				password: true,
+				ignoreFocusOut: true,
+				validateInput: (value) => {
+					try {
+						validateExecutable(value);
+						return undefined;
+					} catch {
+						return 'Use a literal executable name or absolute path without arguments.';
+					}
+				},
+			});
+			if (executable === undefined || !vscode.workspace.isTrusted || this.cancelRequested) return;
+			const environment = await vscode.window.showInputBox({
+				title: 'Terraform UI: private environment overrides',
+				prompt: 'JSON object: string values override inherited extension-host variables; null removes them. {} resets overrides. Stored in host/root-scoped SecretStorage, never imported from terminals.',
+				value: JSON.stringify(current.environment),
+				password: true,
+				ignoreFocusOut: true,
+				validateInput: (value) => {
+					try {
+						parseEnvironment(value);
+						return undefined;
+					} catch {
+						return 'Use a JSON object of strings/null. No duplicate-case names, NUL, or Terraform CLI argument/input/logging overrides.';
+					}
+				},
+			});
+			if (environment === undefined || !vscode.workspace.isTrusted || this.cancelRequested) return;
+			await this.executionSettings.save(root, executable, environment);
+			this.postMessage({ type: 'executionSettingsSaved', root });
+		} catch {
+			this.postMessage({
+				type: 'operationError',
+				error: 'Could not load or save execution settings. Check host SecretStorage and the executable/environment format. Raw diagnostics are withheld.',
+			});
+		} finally {
+			TerraformUIPanel.running = false;
+			this.ownsOperation = false;
+			this.postMessage({ type: 'executionSettingsFinished' });
 		}
 	}
 
@@ -750,6 +882,7 @@ export class TerraformUIPanel {
 			<div class="root-dropdown" id="rootDropdown"></div>
 		</div>
 		<button id="initBtn" disabled>Init</button>
+		<button id="executionSettingsBtn" disabled>Execution settings</button>
 		<button id="cancelOperationBtn" hidden>Cancel operation</button>
 		<button id="planBtn" disabled>▶ Run Plan</button>
 		<div class="spacer"></div>
@@ -835,6 +968,7 @@ export class TerraformUIPanel {
 		const rootSearchWrapper = document.getElementById('rootSearchWrapper');
 		const planBtn = document.getElementById('planBtn');
 		const initBtn = document.getElementById('initBtn');
+		const executionSettingsBtn = document.getElementById('executionSettingsBtn');
 		const initArguments = document.getElementById('initArguments');
 		const saveInitBtn = document.getElementById('saveInitBtn');
 		const initSuggestions = document.getElementById('initSuggestions');
@@ -1010,6 +1144,10 @@ export class TerraformUIPanel {
 			saveCurrentSettings();
 		});
 
+		executionSettingsBtn.addEventListener('click', () => {
+			if (!currentRoot || isRunning) return;
+			vscode.postMessage({ type: 'configureExecution', root: currentRoot });
+		});
 		initBtn.addEventListener('click', () => {
 			if (!currentRoot || isRunning) return;
 			setRunning(true);
@@ -1081,17 +1219,17 @@ export class TerraformUIPanel {
 
 			for (const rc of resources) {
 				const item = document.createElement('div');
-				item.className = 'resource-item' + (selectedResource === rc.address ? ' selected' : '');
+				item.className = 'resource-item' + (selectedResource === rc.selectionId ? ' selected' : '');
 
 				const checkbox = document.createElement('input');
 				checkbox.type = 'checkbox';
-				checkbox.checked = checkedResources.has(rc.address);
+				checkbox.checked = checkedResources.has(rc.selectionId);
 				checkbox.addEventListener('change', (e) => {
 					e.stopPropagation();
 					if (checkbox.checked) {
-						checkedResources.add(rc.address);
+						checkedResources.add(rc.selectionId);
 					} else {
-						checkedResources.delete(rc.address);
+						checkedResources.delete(rc.selectionId);
 					}
 					updateApplyBar();
 				});
@@ -1122,7 +1260,7 @@ export class TerraformUIPanel {
 				item.appendChild(actionBadge);
 
 				item.addEventListener('click', () => {
-					selectedResource = rc.address;
+					selectedResource = rc.selectionId;
 					renderResources();
 					renderDiff(rc);
 				});
@@ -1190,6 +1328,7 @@ export class TerraformUIPanel {
 		function setRunning(val) {
 			isRunning = val;
 			initBtn.disabled = !currentRoot || isRunning;
+			executionSettingsBtn.disabled = !currentRoot || isRunning;
 			initArguments.disabled = isRunning;
 			saveInitBtn.disabled = isRunning || !currentRoot;
 			initSuggestions.disabled = isRunning;
@@ -1204,7 +1343,7 @@ export class TerraformUIPanel {
 		function selectResourceByIndex(index) {
 			if (resources.length === 0 || index < 0 || index >= resources.length) return;
 			const rc = resources[index];
-			selectedResource = rc.address;
+			selectedResource = rc.selectionId;
 			renderResources();
 			renderDiff(rc);
 			// Scroll the selected item into view
@@ -1229,7 +1368,7 @@ export class TerraformUIPanel {
 
 			if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
 				e.preventDefault();
-				const currentIndex = resources.findIndex((rc) => rc.address === selectedResource);
+				const currentIndex = resources.findIndex((rc) => rc.selectionId === selectedResource);
 				if (e.key === 'ArrowDown') {
 					selectResourceByIndex(currentIndex < 0 ? 0 : Math.min(currentIndex + 1, resources.length - 1));
 				} else {
@@ -1281,6 +1420,7 @@ export class TerraformUIPanel {
 						parallelismInput.value = msg.settings.parallelism;
 						initArguments.value = msg.initArguments || '[]';
 						initBtn.disabled = isRunning;
+						executionSettingsBtn.disabled = isRunning;
 						initSuggestions.replaceChildren(new Option('Safe flags from other roots', ''));
 						for (const suggestion of msg.suggestions || []) {
 							initSuggestions.add(new Option(suggestion, suggestion));
@@ -1309,6 +1449,22 @@ export class TerraformUIPanel {
 				case 'initError':
 					setRunning(false);
 					setStatus(msg.error, false);
+					break;
+				case 'executionSettingsStarted':
+					setRunning(true);
+					setStatus('Editing execution settings...', true);
+					resources = [];
+					checkedResources.clear();
+					selectedResource = null;
+					renderResources();
+					diffContent.textContent = 'Run a fresh plan after changing execution settings.';
+					break;
+				case 'executionSettingsFinished':
+					setRunning(false);
+					if (statusText.textContent === 'Editing execution settings...') setStatus('Execution settings closed.', false);
+					break;
+				case 'executionSettingsSaved':
+					statusText.textContent = 'Execution settings saved. Run a fresh plan.';
 					break;
 				case 'initArgumentsSaved':
 					if (msg.root === currentRoot) setStatus('Init arguments saved in SecretStorage', false);
@@ -1339,7 +1495,7 @@ export class TerraformUIPanel {
 					setStatus(resources.length + ' resource change' + (resources.length !== 1 ? 's' : ''), false);
 					renderResources();
 					if (resources.length > 0) {
-						selectedResource = resources[0].address;
+						selectedResource = resources[0].selectionId;
 						renderResources();
 						renderDiff(resources[0]);
 					} else {
@@ -1356,6 +1512,11 @@ export class TerraformUIPanel {
 
 				case 'applyStarted':
 					setRunning(true);
+					resources = [];
+					checkedResources.clear();
+					selectedResource = null;
+					renderResources();
+					diffContent.textContent = 'Run a fresh plan after Apply.';
 					setStatus('Applying...', true);
 					terminalOutput.textContent = '';
 					confirmBar.classList.remove('visible');

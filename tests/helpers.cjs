@@ -20,11 +20,11 @@ function loadWithMocks(file, mocks) {
 	}
 }
 
-function createPanel() {
+function createPanel(shared) {
 	let receive;
 	const messages = [];
-	const values = new Map();
-	const secretValues = new Map();
+	const values = shared?.values ?? new Map();
+	const secretValues = shared?.secretValues ?? new Map();
 	const storage = {
 		get: (key) => values.get(key),
 		update: async (key, value) => { values.set(key, value); },
@@ -42,15 +42,17 @@ function createPanel() {
 		},
 		onDidDispose: () => disposable,
 	};
-	const vscode = {
+	const vscode = shared?.vscode ?? {
 		window: { createWebviewPanel: () => panel },
 		ViewColumn: { One: 1 },
 		workspace: { isTrusted: true },
 		env: {},
 	};
+	vscode.window.createWebviewPanel = () => panel;
 	const { InitSettings } = loadWithMocks('../out/initSettings', { vscode });
-	const { TerraformUIPanel } = loadWithMocks('../out/webviewPanel', { vscode, './initSettings': { InitSettings } });
-	const instance = TerraformUIPanel.create({}, storage, secrets, ['/a', '/b'], '/a', { scheme: 'file', authority: '', fsPath: fs.mkdtempSync(path.join(storageSandbox, 'host-')) });
+	const { TerraformUIPanel } = shared ? { TerraformUIPanel: shared.PanelClass } : loadWithMocks('../out/webviewPanel', { vscode, './initSettings': { InitSettings } });
+	const storageUri = shared?.storageUri ?? { scheme: 'file', authority: '', fsPath: fs.mkdtempSync(path.join(storageSandbox, 'host-')) };
+	const instance = TerraformUIPanel.create({}, storage, secrets, ['/a', '/b'], '/a', storageUri);
 	const sent = [];
 	const dom = new JSDOM(panel.webview.html, {
 		runScripts: 'dangerously',
@@ -61,7 +63,7 @@ function createPanel() {
 	function deliver(message) {
 		dom.window.dispatchEvent(new dom.window.MessageEvent('message', { data: message }));
 	}
-	return { instance, vscode, messages, values, secretValues, secrets, storage, dom, sent, deliver, receive: (message) => receive(message) };
+	return { instance, PanelClass: TerraformUIPanel, storageUri, vscode, messages, values, secretValues, secrets, storage, dom, sent, deliver, receive: (message) => receive(message) };
 }
 
 module.exports = { loadWithMocks, createPanel };
