@@ -1,0 +1,30 @@
+diff --git a/node_modules/shlex/shlex.js b/node_modules/shlex/shlex.js
+--- a/node_modules/shlex/shlex.js
++++ b/node_modules/shlex/shlex.js
+@@ -143,6 +143,7 @@
+     let escaped = false
+     let lastDollar = -2 // position of last dollar sign we saw
+     let token
++    let quoteStart = 0
+ 
+     if (this.debug) {
+       console.log('full input:', '>' + this.string + '<')
+@@ -205,7 +206,8 @@
+       if (inQuote !== false) {
+         // String is finished. Don't grab the quote character.
+         if (char === inQuote) {
+-          token = this.processEscapes(token, inQuote, inDollarQuote === '\'')
++          token = token.slice(0, quoteStart) +
++            this.processEscapes(token.slice(quoteStart), inQuote, inDollarQuote === '\'')
+           inQuote = false
+           inDollarQuote = false
+           continue
+@@ -236,6 +238,8 @@
+           token = token.slice(0, -1)
+         }
+ 
++        // Only decode escapes introduced by this quoted fragment.
++        quoteStart = token.length
+         continue
+       }
+ 

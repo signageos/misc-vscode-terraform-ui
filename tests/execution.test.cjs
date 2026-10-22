@@ -146,7 +146,7 @@ test('Plan and Show use identical executable/env snapshot and withhold split raw
 
 test('Init and Apply share executable/env policy, retain Init noninteractive safety and masked Apply confirmation', async () => {
 	const { runner, calls, processes } = runnerFixture();
-	const init = runner.init('/a', '[]', configured);
+	const init = runner.init('/a', '', configured);
 	assert.equal(calls[0][0], configured.executable);
 	assert.equal(calls[0][2].env.HTTPS_PROXY, configured.environment.HTTPS_PROXY);
 	assert.equal(calls[0][2].env.TF_INPUT, 'false');
@@ -191,7 +191,7 @@ test('Plan stage errors/cancellation never expose raw spawn/provider/JSON messag
 test('All operations mask synchronous spawn failures', async () => {
 	const { TerraformRunner } = loadWithMocks('../out/terraformRunner', { child_process: { spawn: () => { throw new Error('SECRET'); } } });
 	const runner = new TerraformRunner();
-	await assert.rejects(runner.init('/a', '[]', configured), (error) => !error.message.includes('SECRET'));
+	await assert.rejects(runner.init('/a', '', configured), (error) => !error.message.includes('SECRET'));
 	await assert.rejects(runner.plan('/a', () => {}, 1, configured), (error) => !error.message.includes('SECRET'));
 	assert.throws(() => runner.apply('/a', [], () => {}, 1, configured), (error) => !error.message.includes('SECRET'));
 });
@@ -310,7 +310,7 @@ test('Real inert executable with spaces receives exact mock GCP/proxy environmen
 	const runner = new TerraformRunner();
 	const settings = { executable, environment: { GOOGLE_APPLICATION_CREDENTIALS: token, HTTPS_PROXY: 'http://inert.invalid', TFUI_REMOVE: null } };
 	const output = [];
-	await runner.init(sandbox, '[]', settings);
+	await runner.init(sandbox, '', settings);
 	const plan = await runner.plan(sandbox, (text) => output.push(text), 1, settings);
 	assert.equal(maskPlanForDisplay(plan, executionSnapshot(settings)).resourceChanges[0].after.token, '[REDACTED]');
 	const handle = runner.apply(sandbox, ['mock.a'], (text) => { output.push(text); if (text === 'Enter a value:') handle.writeInput('yes\n'); }, 1, settings);
@@ -346,7 +346,7 @@ test('Default Apply retains live output and an active Plan blocks concurrent ope
  assert.equal(output.at(-1),'normal output');
  processes[0].emit('close',0,null);
  const pending=runner.plan('/a',()=>{});
- await assert.rejects(runner.init('/a','[]'),/already running/);
+ await assert.rejects(runner.init('/a',''),/already running/);
  processes[1].emit('close',0,null);
  await new Promise(setImmediate);
  assert.equal(calls.at(-1)[1][0],'show');

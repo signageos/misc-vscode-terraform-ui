@@ -63,13 +63,14 @@
 		}
 	},
 	"scripts": {
+		"postinstall": "node tools/patch-shlex.cjs",
 		"vscode:prepublish": "npm run compile",
 		"vscode:package": "vsce package",
 		"vscode:publish": "npm run vsce:publish ; npm run ovsx:publish",
-		"vsce:publish": "./tools/vsce-publish.bash",
-		"ovsx:publish": "./tools/ovsx-publish.bash",
-		"compile": "tsc -p ./",
-		"watch": "tsc -watch -p ./",
+		"vsce:publish": "npm run compile && ./tools/vsce-publish.bash",
+		"ovsx:publish": "npm run compile && ./tools/ovsx-publish.bash",
+		"compile": "node tools/patch-shlex.cjs && tsc -p ./",
+		"watch": "node tools/patch-shlex.cjs && tsc -watch -p ./",
 		"check-types": "tsc -p ./ --noEmit",
 		"lint": "eslint src",
 		"lint:prettier": "prettier --check \"src/**/*.ts\"",
@@ -90,6 +91,7 @@
 		"typescript-eslint": "^8.58.2"
 	},
 	"dependencies": {
-		"diff": "^9.0.0"
+		"diff": "^9.0.0",
+		"shlex": "2.1.2"
 	}
 }

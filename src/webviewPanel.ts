@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { TerraformRunner, InitCanceledError, TerraformExecutionError } from './terraformRunner';
 import { buildResourceDiff } from './planParser';
 import { InitSettings } from './initSettings';
+import { parseInitArguments } from './initArguments';
 import { HostSecrets } from './hostSecrets';
 import { ExecutionSettings } from './executionSettings';
 import {
@@ -145,7 +146,7 @@ export class TerraformUIPanel {
 				} catch {
 					this.postMessage({
 						type: 'operationError',
-						error: 'Could not save Init arguments. Use a JSON string array and check SecretStorage access.',
+						error: 'Could not save Init arguments. Check quotes, escapes, reserved flags, and SecretStorage access.',
 					});
 				}
 				break;
@@ -204,11 +205,14 @@ export class TerraformUIPanel {
 		this.currentPlan = null;
 		this.postMessage({ type: 'initStarted' });
 		try {
-			await this.initSettings.save(root, args);
+			parseInitArguments(args);
+			await this.initSettings.load(root);
 			if (this.cancelRequested) throw new InitCanceledError();
 			if (!vscode.workspace.isTrusted) throw new Error('Workspace trust is required.');
 			const execution = await this.loadExecution(root);
 			await this.runner.init(root, args, execution);
+			if (this.cancelRequested) throw new InitCanceledError();
+			await this.initSettings.save(root, args);
 			this.currentPlan = null;
 			this.postMessage({ type: 'initComplete' });
 		} catch (error: unknown) {
@@ -217,7 +221,7 @@ export class TerraformUIPanel {
 			} else {
 				this.postMessage({
 					type: 'initError',
-					error: 'Init failed. Check JSON arguments, SecretStorage, Terraform installation, and backend access. Output is withheld to protect credentials.',
+					error: 'Init failed or arguments could not be saved. Check quotes, escapes, reserved flags, SecretStorage, Terraform installation, and backend access. Output is withheld to protect credentials.',
 				});
 			}
 		} finally {
@@ -896,8 +900,8 @@ export class TerraformUIPanel {
 	</div>
 
 	<div class="toolbar">
-		<label for="initArguments">Init arguments (JSON):</label>
-		<input id="initArguments" type="password" value="[]" autocomplete="off" spellcheck="false" aria-label="Init arguments JSON array" />
+		<label for="initArguments">Init arguments:</label>
+		<input id="initArguments" type="text" value="" placeholder="-reconfigure -backend-config=apply.tfvars" autocomplete="off" spellcheck="false" aria-label="Init arguments" />
 		<button id="saveInitBtn">Save arguments</button>
 		<select id="initSuggestions" aria-label="Safe Init flag suggestions"><option value="">Safe flags from other roots</option></select>
 	</div>
@@ -1062,7 +1066,7 @@ export class TerraformUIPanel {
 		function selectRoot(root) {
 			if (isRunning) return;
 			currentRoot = root;
-			initArguments.value = '[]';
+			initArguments.value = '';
 			initBtn.disabled = true;
 			rootSearchInput.value = getRootLabel(root);
 			rootDropdown.classList.remove('visible');
@@ -1418,7 +1422,7 @@ export class TerraformUIPanel {
 				case 'rootSettings': {
 					if (msg.root === currentRoot) {
 						parallelismInput.value = msg.settings.parallelism;
-						initArguments.value = msg.initArguments || '[]';
+						initArguments.value = msg.initArguments || '';
 						initBtn.disabled = isRunning;
 						executionSettingsBtn.disabled = isRunning;
 						initSuggestions.replaceChildren(new Option('Safe flags from other roots', ''));
