@@ -1,24 +1,32 @@
 import * as vscode from 'vscode';
-import { TerraformRunner } from './terraformRunner';
+import { TerraformRunner, InitCanceledError } from './terraformRunner';
 import { buildResourceDiff } from './planParser';
+import { InitSettings } from './initSettings';
 import { TerraformPlan, WebviewMessage, RootSettings, DEFAULT_ROOT_SETTINGS } from './types';
 
 export class TerraformUIPanel {
 	public static readonly viewType = 'terraformUI';
 
 	private readonly panel: vscode.WebviewPanel;
+	private static readonly sharedRunner = new TerraformRunner();
+	private static running = false;
 	private readonly runner: TerraformRunner;
+	private readonly initSettings: InitSettings;
 	private readonly extensionUri: vscode.Uri;
 	private readonly globalState: vscode.Memento;
 	private disposables: vscode.Disposable[] = [];
+	private ownsOperation = false;
+	private cancelRequested = false;
 	private currentPlan: TerraformPlan | null = null;
 	private applyHandle: ReturnType<TerraformRunner['apply']> | null = null;
 
 	public static create(
 		extensionUri: vscode.Uri,
 		globalState: vscode.Memento,
+		secrets: vscode.SecretStorage,
 		terraformRoots: string[],
-		preselectedRoot?: string,
+		preselectedRoot: string | undefined,
+		storageUri: vscode.Uri,
 	): TerraformUIPanel {
 		const panel = vscode.window.createWebviewPanel(
 			TerraformUIPanel.viewType,
@@ -30,20 +38,31 @@ export class TerraformUIPanel {
 			},
 		);
 
-		return new TerraformUIPanel(panel, extensionUri, globalState, terraformRoots, preselectedRoot);
+		return new TerraformUIPanel(
+			panel,
+			extensionUri,
+			globalState,
+			secrets,
+			storageUri,
+			terraformRoots,
+			preselectedRoot,
+		);
 	}
 
 	private constructor(
 		panel: vscode.WebviewPanel,
 		extensionUri: vscode.Uri,
 		globalState: vscode.Memento,
+		secrets: vscode.SecretStorage,
+		storageUri: vscode.Uri,
 		private terraformRoots: string[],
 		private preselectedRoot?: string,
 	) {
 		this.panel = panel;
 		this.extensionUri = extensionUri;
 		this.globalState = globalState;
-		this.runner = new TerraformRunner();
+		this.runner = TerraformUIPanel.sharedRunner;
+		this.initSettings = new InitSettings(secrets, globalState, storageUri);
 
 		this.panel.webview.html = this.getHtmlContent();
 
@@ -66,7 +85,37 @@ export class TerraformUIPanel {
 	}
 
 	private async handleMessage(message: WebviewMessage): Promise<void> {
+		if ('root' in message && (!vscode.workspace.isTrusted || !this.terraformRoots.includes(message.root))) {
+			this.postMessage({
+				type: 'operationError',
+				error: 'Use a detected Terraform root in a trusted workspace.',
+			});
+			return;
+		}
+		if (message.type === 'runInit' || message.type === 'runPlan' || message.type === 'applyTargets') {
+			if (TerraformUIPanel.running) {
+				this.postMessage({ type: 'operationError', error: 'A Terraform operation is already running.' });
+				return;
+			}
+			TerraformUIPanel.running = true;
+			this.ownsOperation = true;
+			this.cancelRequested = false;
+		}
 		switch (message.type) {
+			case 'runInit':
+				await this.runInit(message.root, message.arguments);
+				break;
+			case 'saveInitArguments':
+				try {
+					await this.initSettings.save(message.root, message.arguments);
+					this.postMessage({ type: 'initArgumentsSaved', root: message.root });
+				} catch {
+					this.postMessage({
+						type: 'operationError',
+						error: 'Could not save Init arguments. Use a JSON string array and check SecretStorage access.',
+					});
+				}
+				break;
 			case 'requestRoots':
 				this.postMessage({
 					type: 'terraformRoots',
@@ -90,7 +139,8 @@ export class TerraformUIPanel {
 				break;
 
 			case 'cancelApply':
-				this.runner.cancel();
+				if (this.ownsOperation) this.cancelRequested = true;
+				if (this.ownsOperation) this.runner.cancel();
 				this.applyHandle = null;
 				break;
 
@@ -99,12 +149,46 @@ export class TerraformUIPanel {
 				break;
 
 			case 'loadSettings':
-				this.postMessage({
-					type: 'rootSettings',
-					root: message.root,
-					settings: this.loadRootSettings(message.root),
-				});
+				try {
+					this.postMessage({
+						type: 'rootSettings',
+						root: message.root,
+						settings: this.loadRootSettings(message.root),
+						initArguments: await this.initSettings.load(message.root),
+						suggestions: this.initSettings.suggestions(),
+					});
+				} catch {
+					this.postMessage({
+						type: 'operationError',
+						error: 'Could not load Init arguments from SecretStorage.',
+					});
+				}
 				break;
+		}
+	}
+
+	private async runInit(root: string, args: string): Promise<void> {
+		this.currentPlan = null;
+		this.postMessage({ type: 'initStarted' });
+		try {
+			await this.initSettings.save(root, args);
+			if (this.cancelRequested) throw new InitCanceledError();
+			if (!vscode.workspace.isTrusted) throw new Error('Workspace trust is required.');
+			await this.runner.init(root, args);
+			this.currentPlan = null;
+			this.postMessage({ type: 'initComplete' });
+		} catch (error: unknown) {
+			if (error instanceof InitCanceledError) {
+				this.postMessage({ type: 'initError', error: 'Init canceled.' });
+			} else {
+				this.postMessage({
+					type: 'initError',
+					error: 'Init failed. Check JSON arguments, SecretStorage, Terraform installation, and backend access. Output is withheld to protect credentials.',
+				});
+			}
+		} finally {
+			TerraformUIPanel.running = false;
+			this.ownsOperation = false;
 		}
 	}
 
@@ -135,35 +219,48 @@ export class TerraformUIPanel {
 		} catch (err: unknown) {
 			const errorMsg = err instanceof Error ? err.message : String(err);
 			this.postMessage({ type: 'planError', error: errorMsg });
+		} finally {
+			TerraformUIPanel.running = false;
+			this.ownsOperation = false;
 		}
 	}
 
 	private runApply(root: string, targets: string[], parallelism: number): void {
 		this.postMessage({ type: 'applyStarted' });
 
-		this.applyHandle = this.runner.apply(
-			root,
-			targets,
-			(data) => {
-				this.postMessage({ type: 'applyOutput', data });
+		try {
+			this.applyHandle = this.runner.apply(
+				root,
+				targets,
+				(data) => {
+					this.postMessage({ type: 'applyOutput', data });
 
-				// Detect when terraform asks for confirmation
-				if (data.includes('Enter a value:') || data.includes('Do you want to perform these actions')) {
-					this.postMessage({ type: 'waitingForConfirmation' });
-				}
-			},
-			parallelism,
-		);
+					// Detect when terraform asks for confirmation
+					if (data.includes('Enter a value:') || data.includes('Do you want to perform these actions')) {
+						this.postMessage({ type: 'waitingForConfirmation' });
+					}
+				},
+				parallelism,
+			);
 
-		this.applyHandle.process.on('close', (code) => {
-			this.applyHandle = null;
-			this.postMessage({ type: 'applyComplete', success: code === 0 });
-		});
+			this.applyHandle.process.on('close', (code) => {
+				TerraformUIPanel.running = false;
+				this.ownsOperation = false;
+				this.applyHandle = null;
+				this.postMessage({ type: 'applyComplete', success: code === 0 });
+			});
 
-		this.applyHandle.process.on('error', (err) => {
-			this.applyHandle = null;
-			this.postMessage({ type: 'applyError', error: err.message });
-		});
+			this.applyHandle.process.on('error', (err) => {
+				TerraformUIPanel.running = false;
+				this.ownsOperation = false;
+				this.applyHandle = null;
+				this.postMessage({ type: 'applyError', error: err.message });
+			});
+		} catch {
+			TerraformUIPanel.running = false;
+			this.ownsOperation = false;
+			this.postMessage({ type: 'applyError', error: 'Could not start Terraform Apply.' });
+		}
 	}
 
 	private postMessage(message: unknown): void {
@@ -179,11 +276,16 @@ export class TerraformUIPanel {
 	}
 
 	private async saveRootSettings(root: string, settings: RootSettings): Promise<void> {
-		await this.globalState.update(TerraformUIPanel.settingsKey(root), settings);
+		const parallelism = settings.parallelism;
+		if (!Number.isInteger(parallelism) || parallelism < 1 || parallelism > 256) return;
+		await this.globalState.update(TerraformUIPanel.settingsKey(root), { parallelism });
 	}
 
 	private dispose(): void {
-		this.runner.cancel();
+		if (this.ownsOperation) {
+			this.cancelRequested = true;
+			this.runner.cancel();
+		}
 		for (const d of this.disposables) {
 			d.dispose();
 		}
@@ -647,6 +749,8 @@ export class TerraformUIPanel {
 			<input type="text" class="root-search-input" id="rootSearchInput" placeholder="Search terraform roots..." autocomplete="off" />
 			<div class="root-dropdown" id="rootDropdown"></div>
 		</div>
+		<button id="initBtn" disabled>Init</button>
+		<button id="cancelOperationBtn" hidden>Cancel operation</button>
 		<button id="planBtn" disabled>▶ Run Plan</button>
 		<div class="spacer"></div>
 		<div class="status" id="statusText"></div>
@@ -656,6 +760,13 @@ export class TerraformUIPanel {
 				<input type="number" id="parallelismInput" min="1" max="256" value="10" title="Number of concurrent operations (-parallelism flag)" />
 			</div>
 		</div>
+	</div>
+
+	<div class="toolbar">
+		<label for="initArguments">Init arguments (JSON):</label>
+		<input id="initArguments" type="password" value="[]" autocomplete="off" spellcheck="false" aria-label="Init arguments JSON array" />
+		<button id="saveInitBtn">Save arguments</button>
+		<select id="initSuggestions" aria-label="Safe Init flag suggestions"><option value="">Safe flags from other roots</option></select>
 	</div>
 
 	<!-- Main area -->
@@ -723,6 +834,11 @@ export class TerraformUIPanel {
 		const rootDropdown = document.getElementById('rootDropdown');
 		const rootSearchWrapper = document.getElementById('rootSearchWrapper');
 		const planBtn = document.getElementById('planBtn');
+		const initBtn = document.getElementById('initBtn');
+		const initArguments = document.getElementById('initArguments');
+		const saveInitBtn = document.getElementById('saveInitBtn');
+		const initSuggestions = document.getElementById('initSuggestions');
+		const cancelOperationBtn = document.getElementById('cancelOperationBtn');
 		const statusText = document.getElementById('statusText');
 		const parallelismInput = document.getElementById('parallelismInput');
 		const resourceItems = document.getElementById('resourceItems');
@@ -810,7 +926,10 @@ export class TerraformUIPanel {
 		}
 
 		function selectRoot(root) {
+			if (isRunning) return;
 			currentRoot = root;
+			initArguments.value = '[]';
+			initBtn.disabled = true;
 			rootSearchInput.value = getRootLabel(root);
 			rootDropdown.classList.remove('visible');
 			planBtn.disabled = !currentRoot || isRunning;
@@ -891,9 +1010,27 @@ export class TerraformUIPanel {
 			saveCurrentSettings();
 		});
 
+		initBtn.addEventListener('click', () => {
+			if (!currentRoot || isRunning) return;
+			setRunning(true);
+			vscode.postMessage({ type: 'runInit', root: currentRoot, arguments: initArguments.value });
+		});
+		saveInitBtn.addEventListener('click', () => {
+			if (!currentRoot || isRunning) return;
+			vscode.postMessage({ type: 'saveInitArguments', root: currentRoot, arguments: initArguments.value });
+		});
+		initSuggestions.addEventListener('change', () => {
+			if (initSuggestions.value) initArguments.value = initSuggestions.value;
+		});
+		cancelOperationBtn.addEventListener('click', () => {
+			vscode.postMessage({ type: 'cancelApply' });
+			setStatus('Cancel requested; waiting for Terraform to exit...', true);
+		});
+
 		// Plan button
 		planBtn.addEventListener('click', () => {
 			if (!currentRoot || isRunning) return;
+			setRunning(true);
 			vscode.postMessage({ type: 'runPlan', root: currentRoot, parallelism: getParallelism() });
 		});
 
@@ -906,6 +1043,7 @@ export class TerraformUIPanel {
 		applyBtn.addEventListener('click', () => {
 			if (checkedResources.size === 0 || !currentRoot || isRunning) return;
 			const targets = Array.from(checkedResources);
+			setRunning(true);
 			vscode.postMessage({ type: 'applyTargets', root: currentRoot, targets, parallelism: getParallelism() });
 		});
 
@@ -1051,6 +1189,13 @@ export class TerraformUIPanel {
 
 		function setRunning(val) {
 			isRunning = val;
+			initBtn.disabled = !currentRoot || isRunning;
+			initArguments.disabled = isRunning;
+			saveInitBtn.disabled = isRunning || !currentRoot;
+			initSuggestions.disabled = isRunning;
+			rootSearchInput.disabled = isRunning;
+			parallelismInput.disabled = isRunning;
+			cancelOperationBtn.hidden = !isRunning;
 			planBtn.disabled = !currentRoot || isRunning;
 			updateApplyBar();
 		}
@@ -1134,9 +1279,44 @@ export class TerraformUIPanel {
 				case 'rootSettings': {
 					if (msg.root === currentRoot) {
 						parallelismInput.value = msg.settings.parallelism;
+						initArguments.value = msg.initArguments || '[]';
+						initBtn.disabled = isRunning;
+						initSuggestions.replaceChildren(new Option('Safe flags from other roots', ''));
+						for (const suggestion of msg.suggestions || []) {
+							initSuggestions.add(new Option(suggestion, suggestion));
+						}
 					}
 					break;
 				}
+				case 'initStarted':
+					setRunning(true);
+					setStatus('Initializing (output withheld to protect credentials)...', true);
+					resources = [];
+					checkedResources.clear();
+					selectedResource = null;
+					renderResources();
+					diffContent.textContent = 'Run a fresh plan after Init.';
+					break;
+				case 'initComplete':
+					setRunning(false);
+					resources = [];
+					checkedResources.clear();
+					selectedResource = null;
+					renderResources();
+					diffContent.textContent = 'Run a fresh plan after Init.';
+					setStatus('Init complete', false);
+					break;
+				case 'initError':
+					setRunning(false);
+					setStatus(msg.error, false);
+					break;
+				case 'initArgumentsSaved':
+					if (msg.root === currentRoot) setStatus('Init arguments saved in SecretStorage', false);
+					break;
+				case 'operationError':
+					setRunning(false);
+					setStatus(msg.error, false);
+					break;
 				case 'planStarted':
 					setRunning(true);
 					setStatus('Running plan...', true);

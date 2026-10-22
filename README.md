@@ -24,26 +24,40 @@ A visual diff tool for Terraform plan changes with targeted apply support.
 ### Workflow
 
 1. Select a Terraform root from the dropdown
-2. Click **▶ Run Plan** to execute `terraform plan`
+2. If needed, enter Init arguments as a JSON array (for example `["-upgrade", "-backend-config=env/dev backend.hcl"]`) and click **Init**, then click **▶ Run Plan** to execute `terraform plan`
 3. Review resources in the left panel — click any to see detailed diff
 4. Check the resources you want to apply
 5. Click **Apply Selected** at the bottom
 6. Type `yes` in the confirmation prompt and press Enter
 
+### Init arguments and privacy
+
+Init runs in the selected root without a shell. Enter one JSON string per argument; spaces, quotes, `$`, and other shell characters stay literal. Do not enter a complete command. Input/output controls, directory overrides, help/version flags, and `-force-copy` are rejected; Init always uses `-input=false -no-color`. Configure credentials through backend-supported environment variables where possible.
+
+**Save arguments** and **Init** remember the current root's argument array in VS Code SecretStorage, scoped by extension-host storage installation and root folder. A nonsecret random namespace is kept in the extension's private, file-backed storage directory on that host, isolating local and remote hosts even when their root paths match. Native local desktop `vscode-userdata:` storage uses VS Code's [local filesystem mapping](https://github.com/microsoft/vscode/blob/1.96.0/src/vs/platform/userData/common/fileUserDataProvider.ts); remote hosts require their own authority-free `file:` storage. Browser storage, foreign authorities, and arbitrary URI schemes are not treated as host-local paths. Init argument loading/saving fails closed if this storage is unavailable; legacy unnamespaced arguments are not loaded. Clearing this host storage loses the reference to previously saved arguments (it does not delete the old SecretStorage entries or expose them to another host). The input is masked. Cross-root suggestions contain only complete arrays of these exact flags: `-upgrade`, `-reconfigure`, `-backend=false`, `-get=false`, `-lock=false`. Arguments containing paths, backend configuration, or other values never enter suggestion history or ordinary extension settings.
+
+Init output and raw errors are withheld because backend diagnostics can echo credentials. Terraform CLI argument/logging environment overrides are removed for Init. Arguments are still visible to operating-system process inspection, and Terraform itself can write backend configuration to `.terraform`; SecretStorage does not protect Terraform's files. Use a secure terminal for diagnostics and do not put credentials in shared backend files.
+
+All operations require workspace trust. Only one Terraform process runs at a time across Terraform UI panels. **Cancel operation** requests termination and waits for the process to exit; it does not roll back Terraform's work. Run a fresh plan after Init. Init can download providers/modules and configure backend state; review arguments before running it.
+
 ## Requirements
 
 - **Terraform CLI** must be installed and available in your `PATH`
-- Terraform must be initialized (`terraform init`) in your project directories
+- Initialize each root with **Init** or `terraform init` before running a plan
 
 ## Development
 
 ```bash
-cd experiments/vscode-terraform-ui
-npm install
-npm run compile
+cd misc/vscode-terraform-ui
+docker compose up -d app
+docker compose exec app npm ci
+docker compose exec app npm run check
+docker compose exec app npm test
 ```
 
-To test: Press `F5` in VSCode to launch Extension Development Host.
+`npm test` compiles and discovers `tests/*.test.cjs` through Node’s test runner. It uses mocked processes and a jsdom webview DOM; it never runs Terraform.
+
+To test in VS Code: Press `F5` in VSCode to launch Extension Development Host.
 
 ## Release
 

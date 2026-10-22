@@ -51,6 +51,8 @@ export type ExtensionMessage =
 
 /** Message types sent from webview to extension */
 export type WebviewMessage =
+	| { type: 'runInit'; root: string; arguments: string }
+	| { type: 'saveInitArguments'; root: string; arguments: string }
 	| { type: 'runPlan'; root: string; parallelism: number }
 	| { type: 'applyTargets'; root: string; targets: string[]; parallelism: number }
 	| { type: 'confirmApply'; input: string }

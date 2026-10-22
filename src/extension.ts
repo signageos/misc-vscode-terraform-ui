@@ -7,6 +7,10 @@ export function activate(context: vscode.ExtensionContext): void {
 	vscode.window.showInformationMessage('Terraform UI extension activated!');
 
 	const disposable = vscode.commands.registerCommand('terraformUI.open', async (uri?: vscode.Uri) => {
+		if (!vscode.workspace.isTrusted) {
+			await vscode.window.showWarningMessage('Trust this workspace before opening Terraform UI.');
+			return;
+		}
 		const roots = await findTerraformRoots(uri);
 
 		if (roots.length === 0) {
@@ -23,7 +27,14 @@ export function activate(context: vscode.ExtensionContext): void {
 			preselectedRoot = roots.find((r) => dir === r || dir.startsWith(r + path.sep));
 		}
 
-		TerraformUIPanel.create(context.extensionUri, context.globalState, roots, preselectedRoot);
+		TerraformUIPanel.create(
+			context.extensionUri,
+			context.globalState,
+			context.secrets,
+			roots,
+			preselectedRoot,
+			context.globalStorageUri,
+		);
 	});
 
 	context.subscriptions.push(disposable);

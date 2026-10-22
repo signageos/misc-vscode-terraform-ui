@@ -4,17 +4,60 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { TerraformPlan } from './types';
 import { parsePlanJson } from './planParser';
+import { parseInitArguments } from './initArguments';
+
+export class InitCanceledError extends Error {}
 
 export type OutputCallback = (data: string) => void;
 
 export class TerraformRunner {
 	private currentProcess: cp.ChildProcess | null = null;
 
+	private ensureIdle(): void {
+		if (this.currentProcess) throw new Error('A Terraform operation is already running.');
+	}
+
+	async init(cwd: string, input: string): Promise<void> {
+		this.ensureIdle();
+		const args = parseInitArguments(input);
+		const env: NodeJS.ProcessEnv = { ...process.env, TF_INPUT: 'false', TF_IN_AUTOMATION: '1' };
+		delete env.TF_CLI_ARGS;
+		delete env.TF_CLI_ARGS_init;
+		delete env.TF_LOG;
+		delete env.TF_LOG_PATH;
+		delete env.TF_LOG_CORE;
+		delete env.TF_LOG_PROVIDER;
+		return new Promise<void>((resolve, reject) => {
+			const proc = cp.spawn('terraform', ['init', ...args, '-input=false', '-no-color'], {
+				cwd,
+				env,
+				shell: false,
+				stdio: 'ignore',
+			});
+			this.currentProcess = proc;
+			proc.once('error', () => {
+				reject(new Error('Could not start terraform init. Check Terraform installation and folder access.'));
+			});
+			proc.once('close', (code, signal) => {
+				if (this.currentProcess === proc) this.currentProcess = null;
+				if (signal) reject(new InitCanceledError('Terraform Init canceled.'));
+				else if (code !== 0)
+					reject(
+						new Error(
+							`Terraform Init failed (exit ${code}). Output is withheld to protect credentials; diagnose in a secure terminal.`,
+						),
+					);
+				else resolve();
+			});
+		});
+	}
+
 	/**
 	 * Run `terraform plan` in the given directory, streaming output via callback.
 	 * Returns the parsed plan when complete.
 	 */
 	async plan(cwd: string, onOutput: OutputCallback, parallelism?: number): Promise<TerraformPlan> {
+		this.ensureIdle();
 		// Use a temp file for the plan binary output
 		const planFile = path.join(os.tmpdir(), `tfplan-${Date.now()}`);
 
@@ -48,9 +91,8 @@ export class TerraformRunner {
 			});
 
 			proc.on('close', async (code) => {
-				this.currentProcess = null;
-
 				if (code !== 0) {
+					this.currentProcess = null;
 					try {
 						fs.unlinkSync(planFile);
 					} catch {
@@ -67,6 +109,8 @@ export class TerraformRunner {
 						cwd,
 					});
 
+					this.currentProcess = showProc;
+
 					showProc.stdout?.on('data', (data: Buffer) => {
 						jsonChunks.push(data);
 					});
@@ -76,6 +120,7 @@ export class TerraformRunner {
 					});
 
 					showProc.on('close', (showCode) => {
+						this.currentProcess = null;
 						try {
 							fs.unlinkSync(planFile);
 						} catch {
@@ -106,6 +151,7 @@ export class TerraformRunner {
 						reject(err);
 					});
 				} catch (err) {
+					this.currentProcess = null;
 					try {
 						fs.unlinkSync(planFile);
 					} catch {
@@ -116,7 +162,6 @@ export class TerraformRunner {
 			});
 
 			proc.on('error', (err) => {
-				this.currentProcess = null;
 				reject(err);
 			});
 		});
@@ -132,6 +177,7 @@ export class TerraformRunner {
 		onOutput: OutputCallback,
 		parallelism?: number,
 	): { process: cp.ChildProcess; writeInput: (input: string) => void } {
+		this.ensureIdle();
 		const args = ['apply', '-no-color'];
 		if (parallelism !== undefined) {
 			args.push(`-parallelism=${parallelism}`);
@@ -174,7 +220,6 @@ export class TerraformRunner {
 	cancel(): void {
 		if (this.currentProcess) {
 			this.currentProcess.kill('SIGTERM');
-			this.currentProcess = null;
 		}
 	}
 }

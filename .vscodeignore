@@ -12,3 +12,5 @@ tools/**
 node_modules/
 *.vsix
 .decrypted~*
+
+tests/**
