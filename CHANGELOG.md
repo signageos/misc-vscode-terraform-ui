@@ -10,6 +10,15 @@ Entries should be short and human-readable; for longer entries, use an indented 
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-26
+### Added
+- (public) Initialize Terraform roots with visible terminal-style arguments, private per-root saved settings, and safe flag suggestions.
+- (public) Configure the Terraform executable visibly and choose masked or explicitly revealed environment editing separately for each root.
+- (public) Open the integrated terminal’s current Terraform folder, including folders in symlink-opened workspaces, by typing tfui or terraform-ui in opt-in new POSIX terminals, with keyboard and existing-terminal fallbacks and recovery instructions for expired shortcuts; requires VS Code 1.96.0 or newer.
+
+### Fixed
+- (public) Preserve multiline template and object diff coloring, unchanged context, and literal text rendering on every line; distinguish carriage returns from literal backslash-r text.
+
 ## [0.2.1] - 2026-04-16
 ### Fixed
 - Uploading extensions to public registries
