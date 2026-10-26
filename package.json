@@ -10,10 +10,13 @@
 	},
 	"license": "MIT",
 	"engines": {
-		"vscode": "^1.85.0"
+		"vscode": "^1.96.0"
 	},
 	"categories": [
 		"Other"
+	],
+	"extensionKind": [
+		"workspace"
 	],
 	"activationEvents": [
 		"*"
@@ -22,8 +25,31 @@
 	"contributes": {
 		"commands": [
 			{
+				"command": "terraformUI.enableTerminalLauncher",
+				"title": "Terraform UI: Enable tfui / terraform-ui in New Terminals",
+				"enablement": "isWorkspaceTrusted"
+			},
+			{
 				"command": "terraformUI.open",
 				"title": "Terraform UI"
+			},
+			{
+				"command": "terraformUI.openFromTerminal",
+				"title": "Terraform UI: Open from Terminal Folder",
+				"enablement": "isWorkspaceTrusted"
+			},
+			{
+				"command": "terraformUI.enableTerminalShortcut",
+				"title": "Terraform UI: Enable tfui in This Terminal",
+				"enablement": "isWorkspaceTrusted"
+			}
+		],
+		"keybindings": [
+			{
+				"command": "terraformUI.openFromTerminal",
+				"key": "ctrl+alt+shift+t",
+				"mac": "cmd+alt+shift+t",
+				"when": "terminalFocus && isWorkspaceTrusted"
 			}
 		],
 		"menus": {
@@ -37,29 +63,36 @@
 		}
 	},
 	"scripts": {
+		"postinstall": "node tools/patch-shlex.cjs",
 		"vscode:prepublish": "npm run compile",
 		"vscode:package": "vsce package",
 		"vscode:publish": "npm run vsce:publish ; npm run ovsx:publish",
-		"vsce:publish": "./tools/vsce-publish.bash",
-		"ovsx:publish": "./tools/ovsx-publish.bash",
-		"compile": "tsc -p ./",
-		"watch": "tsc -watch -p ./",
+		"vsce:publish": "npm run compile && ./tools/vsce-publish.bash",
+		"ovsx:publish": "npm run compile && ./tools/ovsx-publish.bash",
+		"compile": "node tools/patch-shlex.cjs && tsc -p ./",
+		"watch": "node tools/patch-shlex.cjs && tsc -watch -p ./",
 		"check-types": "tsc -p ./ --noEmit",
 		"lint": "eslint src",
 		"lint:prettier": "prettier --check \"src/**/*.ts\"",
-		"test": "echo \"No tests configured\" && exit 0",
+		"test": "npm run compile && node --test tests/*.test.cjs",
 		"check": "npm run check-types && npm run lint && npm run lint:prettier"
 	},
 	"devDependencies": {
 		"@types/node": "^20.19.39",
-		"@types/vscode": "^1.85.0",
+		"@types/vscode": "^1.93.0",
 		"@typescript-eslint/eslint-plugin": "^8.58.2",
 		"@typescript-eslint/parser": "^8.58.2",
 		"@vscode/vsce": "^3.0.0",
 		"eslint": "^10.2.0",
+		"jsdom": "^30.1.3",
 		"prettier": "^3.8.3",
 		"ts-loader": "^9.5.1",
 		"typescript": "^5.3.3",
-		"typescript-eslint": "^8.58.2"
+		"typescript-eslint": "^8.58.2",
+		"vscode-uri": "^3.1.0"
+	},
+	"dependencies": {
+		"diff": "^9.0.0",
+		"shlex": "2.1.2"
 	}
 }

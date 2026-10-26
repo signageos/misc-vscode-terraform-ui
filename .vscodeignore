@@ -9,6 +9,16 @@ src/**
 **/*.map
 **/*.ts
 tools/**
-node_modules/
+patches/**
+node_modules/**
+!node_modules/diff/package.json
+!node_modules/shlex/package.json
+!node_modules/shlex/LICENSE
+!node_modules/shlex/shlex.js
+!node_modules/diff/LICENSE
+!node_modules/diff/libcjs/**/*.js
+!node_modules/diff/libcjs/package.json
 *.vsix
 .decrypted~*
+
+tests/**

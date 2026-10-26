@@ -1,0 +1,16 @@
+{
+	"resource_changes": [
+		{
+			"address": "local_file.template",
+			"mode": "managed",
+			"type": "local_file",
+			"name": "template",
+			"change": {
+				"actions": ["update"],
+				"before": { "content": "start\nold one\nold two\nend\n", "unchanged": "safe\n+ not an addition\n- not a removal\n", "object": { "a": 1, "b": 2 } },
+				"after": { "content": "start\nnew one\nnew two\nend\n", "unchanged": "safe\n+ not an addition\n- not a removal\n", "object": { "a": 1, "b": 3 } },
+				"after_unknown": {}
+			}
+		}
+	]
+}
