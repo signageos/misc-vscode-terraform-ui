@@ -252,9 +252,11 @@ test('Settings snapshot loads before every panel operation and cancellation duri
 			let targets=[];
 			if(type==='applyTargets') { ui.instance.runner.plan=async()=>rawPlan(); await ui.receive({type:'runPlan',root:'/a',parallelism:3}); targets=[ui.messages.find(m=>m.type==='planComplete').plan.resourceChanges[0].selectionId]; }
 			const message = { type, root: '/a', arguments: '[]', targets, parallelism: 3 };
-			await ui.receive(message);
+			const running = ui.receive(message);
+			await new Promise(setImmediate);
 			assert.deepEqual(launches, [configured]);
 			if (type === 'applyTargets') ui.instance.applyHandle.process.emit('close', 0);
+			await running;
 			let complete;
 			ui.instance.executionSettings.load = () => new Promise((resolve) => { complete = resolve; });
 			const pending = ui.receive(message);
@@ -411,9 +413,11 @@ test('Plan -> rendered collision rows -> Apply argv resolves opaque IDs to origi
    ui.dom.window.document.getElementById('applyBtn').click();
    const request=ui.sent.at(-1);
    assert.deepEqual(Array.from(request.targets),selection.map(i=>rows[i].selectionId));
-   await ui.receive(request);
+   const applying = ui.receive(request);
+   await new Promise(setImmediate);
    assert.deepEqual(fixture.calls.at(-1)[1].filter(a=>a.startsWith('-target=')),selection.map(i=>'-target='+addresses[i]));
    fixture.processes.at(-1).emit('close',0,null);
+   await applying;
   }
  } finally {ui.dom.window.close();}
 });
@@ -451,7 +455,7 @@ test('Two actual panel instances reject Apply after every saved execution contex
   first.instance.runner.plan=async()=>rawPlan();
   first.instance.runner.apply=(...args)=>{calls.push(args); return {process:processMock(),writeInput(){}};};
   try {
-   assert.equal(first.instance.runner,second.instance.runner);
+   assert.notEqual(first.instance.runner,second.instance.runner);
    await first.instance.executionSettings.save('/a',initial.executable,JSON.stringify(initial.environment));
    await first.receive({type:'runPlan',root:'/a',parallelism:2});
    const id=first.messages.find(m=>m.type==='planComplete').plan.resourceChanges[0].selectionId;
@@ -464,11 +468,13 @@ test('Two actual panel instances reject Apply after every saved execution contex
    assert.equal(first.instance.currentPlan,null);
    await first.receive({type:'runPlan',root:'/a',parallelism:2});
    const fresh=first.messages.filter(m=>m.type==='planComplete').at(-1).plan.resourceChanges[0].selectionId;
-   await first.receive({type:'applyTargets',root:'/a',targets:[fresh],parallelism:2});
+   const applying = first.receive({type:'applyTargets',root:'/a',targets:[fresh],parallelism:2});
+   await new Promise(setImmediate);
    assert.equal(calls.length,1);
    assert.deepEqual(calls[0].at(-1),changed);
    assert.deepEqual(calls[0][1],['mock.a']);
    first.instance.applyHandle.process.emit('close',0);
+   await applying;
   } finally {first.dom.window.close();second.dom.window.close();}
  }
 });
