@@ -10,6 +10,10 @@ Entries should be short and human-readable; for longer entries, use an indented 
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-27
+### Fixed
+- (public) Terraform UI can run operations concurrently in different root directories while preventing overlapping operations in the same directory.
+
 ## [0.3.0] - 2026-10-26
 ### Added
 - (public) Initialize Terraform roots with visible terminal-style arguments, private per-root saved settings, and safe flag suggestions.
