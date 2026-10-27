@@ -14,8 +14,18 @@ export type OutputCallback = (data: string) => void;
 
 export class TerraformRunner {
 	private currentProcess: cp.ChildProcess | null = null;
+	private processClosed: Promise<void> = Promise.resolve();
 	private planning = false;
 	private planCanceled = false;
+
+	private trackProcess(proc: cp.ChildProcess): void {
+		this.currentProcess = proc;
+		this.processClosed = new Promise((resolve) => proc.once('close', () => resolve()));
+	}
+
+	async waitForIdle(): Promise<void> {
+		await this.processClosed;
+	}
 
 	private ensureIdle(): void {
 		if (this.currentProcess || this.planning) throw new Error('A Terraform operation is already running.');
@@ -43,7 +53,7 @@ export class TerraformRunner {
 				);
 				return;
 			}
-			this.currentProcess = proc;
+			this.trackProcess(proc);
 			proc.once('error', () => {
 				reject(new Error('Could not start terraform init. Check Terraform installation and folder access.'));
 			});
@@ -73,16 +83,18 @@ export class TerraformRunner {
 	): Promise<TerraformPlan> {
 		this.ensureIdle();
 		const execution = executionSnapshot(settings);
-		const planFile = path.join(os.tmpdir(), `tfplan-${Date.now()}`);
+		const planDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'tfui-plan-'));
+		const planFile = path.join(planDirectory, 'plan');
 		const args = ['plan', `-out=${planFile}`, '-no-color', '-input=false'];
 		if (parallelism !== undefined) args.push(`-parallelism=${parallelism}`);
 		this.planning = true;
 		this.planCanceled = false;
-		this.diagnostics('Plan', execution, onOutput);
 		try {
+			this.diagnostics('Plan', execution, onOutput);
 			const rawOutput = await this.runPlanProcess(cwd, args, execution, onOutput, false);
 			if (this.planCanceled) throw new TerraformExecutionError('Terraform Plan canceled.');
 			const jsonOutput = await this.runPlanProcess(cwd, ['show', '-json', planFile], execution, onOutput, true);
+			if (this.planCanceled) throw new TerraformExecutionError('Terraform Plan canceled.');
 			try {
 				const plan = parsePlanJson(jsonOutput);
 				plan.rawOutput = rawOutput;
@@ -93,12 +105,9 @@ export class TerraformRunner {
 				);
 			}
 		} finally {
+			await this.waitForIdle();
 			this.planning = false;
-			try {
-				fs.unlinkSync(planFile);
-			} catch {
-				/* The process may not have created a plan file. */
-			}
+			fs.rmSync(planDirectory, { recursive: true, force: true });
 		}
 	}
 
@@ -130,7 +139,7 @@ export class TerraformRunner {
 				);
 				return;
 			}
-			this.currentProcess = proc;
+			this.trackProcess(proc);
 			const chunks: Buffer[] = [];
 			proc.stdout?.on('data', (data: Buffer) => {
 				if (show || !execution.withholdOutput) chunks.push(data);
@@ -193,7 +202,7 @@ export class TerraformRunner {
 				'Could not start Terraform Apply. Check execution settings and host access.',
 			);
 		}
-		this.currentProcess = proc;
+		this.trackProcess(proc);
 		let promptTail = '';
 		let prompted = false;
 		const output = (data: Buffer): void => {

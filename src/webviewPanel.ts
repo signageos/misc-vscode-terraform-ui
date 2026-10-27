@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { randomUUID } from 'crypto';
+import { realpathSync } from 'fs';
 import { TerraformRunner, InitCanceledError, TerraformExecutionError } from './terraformRunner';
 import { buildResourceDiff } from './planParser';
 import { InitSettings } from './initSettings';
@@ -20,8 +21,7 @@ export class TerraformUIPanel {
 	public static readonly viewType = 'terraformUI';
 
 	private readonly panel: vscode.WebviewPanel;
-	private static readonly sharedRunner = new TerraformRunner();
-	private static running = false;
+	private static readonly operations = new Map<string, object>();
 	private readonly runner: TerraformRunner;
 	private readonly initSettings: InitSettings;
 	private readonly executionSettings: ExecutionSettings;
@@ -29,9 +29,11 @@ export class TerraformUIPanel {
 	private readonly globalState: vscode.Memento;
 	private disposables: vscode.Disposable[] = [];
 	private ownsOperation = false;
+	private disposed = false;
 	private cancelRequested = false;
 	private currentPlan: {
 		root: string;
+		canonicalRoot: string;
 		executionIdentity: string;
 		targets: Map<string, string>;
 	} | null = null;
@@ -78,7 +80,7 @@ export class TerraformUIPanel {
 		this.panel = panel;
 		this.extensionUri = extensionUri;
 		this.globalState = globalState;
-		this.runner = TerraformUIPanel.sharedRunner;
+		this.runner = new TerraformRunner();
 		this.initSettings = new InitSettings(secrets, globalState, storageUri);
 		this.executionSettings = new ExecutionSettings(
 			new HostSecrets(
@@ -111,6 +113,7 @@ export class TerraformUIPanel {
 	}
 
 	private async handleMessage(message: WebviewMessage): Promise<void> {
+		if (this.disposed) return;
 		if ('root' in message && (!vscode.workspace.isTrusted || !this.terraformRoots.includes(message.root))) {
 			this.postMessage({
 				type: 'operationError',
@@ -118,90 +121,127 @@ export class TerraformUIPanel {
 			});
 			return;
 		}
+		let reservation: { key: string; token: object } | undefined;
 		if (
 			message.type === 'runInit' ||
 			message.type === 'runPlan' ||
 			message.type === 'applyTargets' ||
 			message.type === 'configureExecution'
 		) {
-			if (TerraformUIPanel.running) {
-				this.postMessage({ type: 'operationError', error: 'A Terraform operation is already running.' });
+			// Resolve and reserve synchronously, before any SecretStorage or dialog awaits.
+			let key: string;
+			try {
+				key = realpathSync(message.root);
+			} catch {
+				const error = 'Could not resolve the Terraform root directory.';
+				if (message.type === 'runPlan' || message.type === 'applyTargets') {
+					this.currentPlan = null;
+					this.postMessage({ type: message.type === 'runPlan' ? 'planStarted' : 'applyStarted' });
+					this.postMessage({ type: message.type === 'runPlan' ? 'planError' : 'applyError', error });
+				} else {
+					this.postMessage({ type: 'operationError', error });
+				}
 				return;
 			}
-			TerraformUIPanel.running = true;
+			if (this.ownsOperation || TerraformUIPanel.operations.has(key)) {
+				this.postMessage({
+					type: 'operationError',
+					error: 'A Terraform operation is already running for this panel or root.',
+				});
+				return;
+			}
+			const token = {};
+			TerraformUIPanel.operations.set(key, token);
+			reservation = { key, token };
 			this.ownsOperation = true;
 			this.cancelRequested = false;
 		}
-		switch (message.type) {
-			case 'configureExecution':
-				await this.configureExecution(message.root);
-				break;
-			case 'runInit':
-				await this.runInit(message.root, message.arguments);
-				break;
-			case 'saveInitArguments':
-				try {
-					await this.initSettings.save(message.root, message.arguments);
-					this.postMessage({ type: 'initArgumentsSaved', root: message.root });
-				} catch {
+		try {
+			switch (message.type) {
+				case 'configureExecution':
+					await this.configureExecution(message.root);
+					break;
+				case 'runInit':
+					await this.runInit(message.root, message.arguments, reservation?.key ?? message.root);
+					break;
+				case 'saveInitArguments':
+					try {
+						await this.initSettings.save(message.root, message.arguments);
+						this.postMessage({ type: 'initArgumentsSaved', root: message.root });
+					} catch {
+						this.postMessage({
+							type: 'operationError',
+							error: 'Could not save Init arguments. Check quotes, escapes, reserved flags, and SecretStorage access.',
+						});
+					}
+					break;
+				case 'requestRoots':
 					this.postMessage({
-						type: 'operationError',
-						error: 'Could not save Init arguments. Check quotes, escapes, reserved flags, and SecretStorage access.',
+						type: 'terraformRoots',
+						roots: this.terraformRoots,
+						preselectedRoot: this.preselectedRoot,
 					});
+					break;
+
+				case 'runPlan':
+					await this.runPlan(message.root, message.parallelism, reservation?.key ?? message.root);
+					break;
+
+				case 'applyTargets':
+					await this.runApply(
+						message.root,
+						message.targets,
+						message.parallelism,
+						reservation?.key ?? message.root,
+					);
+					break;
+
+				case 'confirmApply':
+					if (this.applyHandle) {
+						this.applyHandle.writeInput(message.input + '\n');
+					}
+					break;
+
+				case 'cancelApply':
+					if (this.ownsOperation) this.cancelRequested = true;
+					if (this.ownsOperation) this.runner.cancel();
+					this.applyHandle = null;
+					break;
+
+				case 'saveSettings':
+					await this.saveRootSettings(message.root, message.settings);
+					break;
+
+				case 'loadSettings':
+					try {
+						this.postMessage({
+							type: 'rootSettings',
+							root: message.root,
+							settings: this.loadRootSettings(message.root),
+							initArguments: await this.initSettings.load(message.root),
+							suggestions: this.initSettings.suggestions(),
+						});
+					} catch {
+						this.postMessage({
+							type: 'operationError',
+							error: 'Could not load Init arguments from SecretStorage.',
+						});
+					}
+					break;
+			}
+		} finally {
+			if (reservation) {
+				// Error/kill requests do not prove that the child has stopped using its state.
+				await this.runner.waitForIdle();
+				if (TerraformUIPanel.operations.get(reservation.key) === reservation.token) {
+					TerraformUIPanel.operations.delete(reservation.key);
+					this.ownsOperation = false;
 				}
-				break;
-			case 'requestRoots':
-				this.postMessage({
-					type: 'terraformRoots',
-					roots: this.terraformRoots,
-					preselectedRoot: this.preselectedRoot,
-				});
-				break;
-
-			case 'runPlan':
-				await this.runPlan(message.root, message.parallelism);
-				break;
-
-			case 'applyTargets':
-				await this.runApply(message.root, message.targets, message.parallelism);
-				break;
-
-			case 'confirmApply':
-				if (this.applyHandle) {
-					this.applyHandle.writeInput(message.input + '\n');
-				}
-				break;
-
-			case 'cancelApply':
-				if (this.ownsOperation) this.cancelRequested = true;
-				if (this.ownsOperation) this.runner.cancel();
-				this.applyHandle = null;
-				break;
-
-			case 'saveSettings':
-				await this.saveRootSettings(message.root, message.settings);
-				break;
-
-			case 'loadSettings':
-				try {
-					this.postMessage({
-						type: 'rootSettings',
-						root: message.root,
-						settings: this.loadRootSettings(message.root),
-						initArguments: await this.initSettings.load(message.root),
-						suggestions: this.initSettings.suggestions(),
-					});
-				} catch {
-					this.postMessage({
-						type: 'operationError',
-						error: 'Could not load Init arguments from SecretStorage.',
-					});
-				}
-				break;
+			}
 		}
 	}
 
-	private async runInit(root: string, args: string): Promise<void> {
+	private async runInit(root: string, args: string, cwd: string): Promise<void> {
 		this.currentPlan = null;
 		this.postMessage({ type: 'initStarted' });
 		try {
@@ -210,7 +250,7 @@ export class TerraformUIPanel {
 			if (this.cancelRequested) throw new InitCanceledError();
 			if (!vscode.workspace.isTrusted) throw new Error('Workspace trust is required.');
 			const execution = await this.loadExecution(root);
-			await this.runner.init(root, args, execution);
+			await this.runner.init(cwd, args, execution);
 			if (this.cancelRequested) throw new InitCanceledError();
 			await this.initSettings.save(root, args);
 			this.currentPlan = null;
@@ -224,20 +264,17 @@ export class TerraformUIPanel {
 					error: 'Init failed or arguments could not be saved. Check quotes, escapes, reserved flags, SecretStorage, Terraform installation, and backend access. Output is withheld to protect credentials.',
 				});
 			}
-		} finally {
-			TerraformUIPanel.running = false;
-			this.ownsOperation = false;
 		}
 	}
 
-	private async runPlan(root: string, parallelism: number): Promise<void> {
+	private async runPlan(root: string, parallelism: number, cwd: string): Promise<void> {
 		this.currentPlan = null;
 		this.postMessage({ type: 'planStarted' });
 
 		try {
 			const execution = await this.loadExecution(root);
 			const plan = await this.runner.plan(
-				root,
+				cwd,
 				(data) => {
 					this.postMessage({ type: 'planOutput', data });
 				},
@@ -252,7 +289,7 @@ export class TerraformUIPanel {
 				targets.set(selectionId, plan.resourceChanges[index].address);
 				return { ...rc, selectionId, diffText: buildResourceDiff(rc) };
 			});
-			this.currentPlan = { root, executionIdentity: executionIdentity(execution), targets };
+			this.currentPlan = { root, canonicalRoot: cwd, executionIdentity: executionIdentity(execution), targets };
 
 			this.postMessage({
 				type: 'planComplete',
@@ -267,13 +304,10 @@ export class TerraformUIPanel {
 						? error.message
 						: 'Plan failed. Check execution settings, SecretStorage, Terraform installation and provider access. Raw errors are withheld.',
 			});
-		} finally {
-			TerraformUIPanel.running = false;
-			this.ownsOperation = false;
 		}
 	}
 
-	private async runApply(root: string, targets: string[], parallelism: number): Promise<void> {
+	private async runApply(root: string, targets: string[], parallelism: number, cwd: string): Promise<void> {
 		this.postMessage({ type: 'applyStarted' });
 
 		try {
@@ -283,6 +317,7 @@ export class TerraformUIPanel {
 				!planned ||
 				planned !== this.currentPlan ||
 				planned.root !== root ||
+				planned.canonicalRoot !== cwd ||
 				planned.executionIdentity !== executionIdentity(execution) ||
 				targets.length === 0 ||
 				targets.some((id) => !planned.targets.has(id))
@@ -297,7 +332,7 @@ export class TerraformUIPanel {
 				.filter((address): address is string => address !== undefined);
 			this.currentPlan = null;
 			this.applyHandle = this.runner.apply(
-				root,
+				cwd,
 				addresses,
 				(data) => {
 					this.postMessage({ type: 'applyOutput', data });
@@ -311,26 +346,24 @@ export class TerraformUIPanel {
 				execution,
 			);
 
-			this.applyHandle.process.on('close', (code) => {
-				TerraformUIPanel.running = false;
-				this.ownsOperation = false;
-				this.applyHandle = null;
-				this.postMessage({ type: 'applyComplete', success: code === 0 });
-			});
-
-			this.applyHandle.process.on('error', () => {
-				TerraformUIPanel.running = false;
-				this.ownsOperation = false;
-				this.applyHandle = null;
-				this.postMessage({
-					type: 'applyError',
-					error: 'Could not start Terraform Apply. Check execution settings and host access. Raw errors are withheld.',
+			const handle = this.applyHandle;
+			await new Promise<void>((resolve) => {
+				let failed = false;
+				handle.process.once('error', () => {
+					failed = true;
+					this.postMessage({
+						type: 'applyError',
+						error: 'Could not start Terraform Apply. Check execution settings and host access. Raw errors are withheld.',
+					});
+				});
+				handle.process.once('close', (code) => {
+					if (this.applyHandle === handle) this.applyHandle = null;
+					if (!failed) this.postMessage({ type: 'applyComplete', success: code === 0 });
+					resolve();
 				});
 			});
 		} catch (error: unknown) {
 			this.currentPlan = null;
-			TerraformUIPanel.running = false;
-			this.ownsOperation = false;
 			this.postMessage({
 				type: 'applyError',
 				error: this.cancelRequested
@@ -408,8 +441,6 @@ export class TerraformUIPanel {
 				error: 'Could not load or save execution settings. Check host SecretStorage and the executable/environment format. Raw diagnostics are withheld.',
 			});
 		} finally {
-			TerraformUIPanel.running = false;
-			this.ownsOperation = false;
 			this.postMessage({ type: 'executionSettingsFinished' });
 		}
 	}
@@ -433,6 +464,7 @@ export class TerraformUIPanel {
 	}
 
 	private dispose(): void {
+		this.disposed = true;
 		if (this.ownsOperation) {
 			this.cancelRequested = true;
 			this.runner.cancel();

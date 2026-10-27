@@ -50,20 +50,33 @@ function createPanel(shared) {
 	};
 	vscode.window.createWebviewPanel = () => panel;
 	const { InitSettings } = loadWithMocks('../out/initSettings', { vscode });
-	const { TerraformUIPanel } = shared ? { TerraformUIPanel: shared.PanelClass } : loadWithMocks('../out/webviewPanel', { vscode, './initSettings': { InitSettings } });
+	// Legacy safety tests use virtual /a and /b; real-root concurrency tests resolve the actual filesystem.
+	const { TerraformUIPanel } = shared ? { TerraformUIPanel: shared.PanelClass } : loadWithMocks('../out/webviewPanel', { vscode, './initSettings': { InitSettings }, fs: { ...fs, realpathSync: root => ['/a', '/b'].includes(root) ? root : fs.realpathSync(root) } });
 	const storageUri = shared?.storageUri ?? { scheme: 'file', authority: '', fsPath: fs.mkdtempSync(path.join(storageSandbox, 'host-')) };
 	const instance = TerraformUIPanel.create({}, storage, secrets, ['/a', '/b'], '/a', storageUri);
 	const sent = [];
+	const pending = [];
+	let connected = false;
+	function send(message) {
+		sent.push(message);
+		if (connected) pending.push(receive(message));
+	}
 	const dom = new JSDOM(panel.webview.html, {
 		runScripts: 'dangerously',
 		beforeParse(window) {
-			window.acquireVsCodeApi = () => ({ postMessage: (message) => sent.push(message) });
+			window.acquireVsCodeApi = () => ({ postMessage: send });
 		},
 	});
 	function deliver(message) {
 		dom.window.dispatchEvent(new dom.window.MessageEvent('message', { data: message }));
 	}
-	return { instance, PanelClass: TerraformUIPanel, storageUri, vscode, messages, values, secretValues, secrets, storage, dom, sent, deliver, receive: (message) => receive(message) };
+	function connect() {
+		if (connected) return;
+		connected = true;
+		panel.webview.postMessage = message => { messages.push(message); deliver(message); };
+		for (const message of [...sent]) pending.push(receive(message));
+	}
+	return { instance, PanelClass: TerraformUIPanel, storageUri, vscode, messages, values, secretValues, secrets, storage, dom, sent, deliver, connect, pending, receive: (message) => receive(message) };
 }
 
 module.exports = { loadWithMocks, createPanel };
